@@ -303,11 +303,18 @@
   </div>
 
   <script>
-    // ========================================================
-    // การตั้งค่าเชื่อมต่อ Google Apps Script Web App (Backend)
-    // ========================================================
-    // นำ URL ที่ได้จากการ Deploy Apps Script (ลงท้ายด้วย /exec) มาวางที่นี่
     const API_URL = "https://script.google.com/macros/s/AKfycbxyIKr4eHOkCkNxLx8C1rQu6kobokyCz8h0G4btncxi3pMnjvq8hBoriZ9fY0GytOlz1w/exec"; 
+
+    // ฟังก์ชันช่วยแตกแกะข้อมูล Array ออกมาจาก Response Object
+    function extractArray(response) {
+      if (!response) return [];
+      if (Array.isArray(response)) return response;
+      if (Array.isArray(response.data)) return response.data;
+      if (Array.isArray(response.result)) return response.result;
+      if (Array.isArray(response.history)) return response.history;
+      if (Array.isArray(response.items)) return response.items;
+      return [];
+    }
 
     const AppDB = {
       async callAPI(action, payload = null, extra = {}) {
@@ -345,7 +352,7 @@
       },
       async getItems() {
         const apiRes = await this.callAPI('getItems');
-        if (apiRes) return apiRes;
+        if (apiRes) return extractArray(apiRes);
         this.init();
         return JSON.parse(localStorage.getItem('med_items'));
       },
@@ -354,7 +361,7 @@
       },
       async getHistory() {
         const apiRes = await this.callAPI('getHistory');
-        if (apiRes) return apiRes;
+        if (apiRes) return extractArray(apiRes);
         this.init();
         return JSON.parse(localStorage.getItem('med_history'));
       },
@@ -403,7 +410,7 @@
       },
       async getBorrowedItems() {
         const apiRes = await this.callAPI('getBorrowedItems');
-        if (apiRes) return apiRes;
+        if (apiRes) return extractArray(apiRes);
 
         const history = await this.getHistory();
         const items = await this.getItems();
@@ -505,7 +512,7 @@
         });
 
         history.forEach(h => {
-          if (h.status === 'borrowed') borrowedItems += h.borrowQty;
+          if (h.status === 'borrowed') borrowedItems += (h.borrowQty || 1);
           if (h.status === 'returned' && typeof h.consumedQty === 'number') totalConsumed += h.consumedQty;
         });
 
@@ -517,7 +524,7 @@
           let consumed = 0;
           let currentlyBorrowed = 0;
           itemBorrows.forEach(h => {
-            if (h.status === 'borrowed') currentlyBorrowed += h.borrowQty;
+            if (h.status === 'borrowed') currentlyBorrowed += (h.borrowQty || 1);
             if (h.status === 'returned' && typeof h.consumedQty === 'number') consumed += h.consumedQty;
           });
 
@@ -554,9 +561,6 @@
       }
     };
 
-    // ========================================================
-    // ตัวแปรและฟังก์ชันควบคุมระบบหน้าบ้าน (Frontend logic)
-    // ========================================================
     let cart = []; 
     let allBorrowedItems = []; 
     let myPieChart = null;
@@ -725,7 +729,7 @@
     
     async function fetchBorrowedItemsForReturn() {
       const data = await AppDB.getBorrowedItems();
-      allBorrowedItems = data || []; 
+      allBorrowedItems = extractArray(data); 
       dataCacheFlags.return = false; 
       document.getElementById('return-search-input').value = ''; 
       renderReturnTable(allBorrowedItems); 
@@ -734,22 +738,24 @@
 
     function renderReturnTable(items) {
       const tbody = document.getElementById('return-items-body'); tbody.innerHTML = '';
-      if(!items || items.length === 0) { tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;">ไม่มีรายการที่ต้องคืน</td></tr>`; return; }
+      const list = extractArray(items);
+      if(!list || list.length === 0) { tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;">ไม่มีรายการที่ต้องคืน</td></tr>`; return; }
       
-      items.forEach(item => {
-        const qty = item.borrowQty || 1; 
+      list.forEach(item => {
+        const id = item.historyId || item.id || '-';
+        const qty = item.borrowQty || item.qty || 1; 
         let systemQty = 1;
         if (window.allItems) { const sysItem = window.allItems.find(i => i.name === item.itemName); if (sysItem) { systemQty = sysItem.totalQuantity; } }
         systemQty = item.totalQuantity || systemQty; 
         
         tbody.innerHTML += `<tr>
-          <td style="text-align: center;"><button type="button" class="btn btn-primary return-toggle-btn" data-id="${item.historyId}" data-selected="false" data-system-qty="${systemQty}" onclick="toggleReturnBtn(this)" style="font-size: 12px; padding: 6px 10px;">กดเลือก</button></td>
-          <td>${item.historyId}</td>
-          <td>${item.itemName}</td>
-          <td>${item.borrowerName}</td>
+          <td style="text-align: center;"><button type="button" class="btn btn-primary return-toggle-btn" data-id="${id}" data-selected="false" data-system-qty="${systemQty}" onclick="toggleReturnBtn(this)" style="font-size: 12px; padding: 6px 10px;">กดเลือก</button></td>
+          <td>${id}</td>
+          <td>${item.itemName || '-'}</td>
+          <td>${item.borrowerName || '-'}</td>
           <td style="text-align: center; font-weight: bold;">${qty}</td>
-          <td style="text-align: center;" class="qty-input-group"><input type="number" inputmode="numeric" pattern="[0-9]*" id="ret-good-${item.historyId}" value="${qty}" min="0" max="${qty}" readonly onchange="autoCalcConsumed(${item.historyId}, ${qty})"></td>
-          <td style="text-align: center;" class="qty-input-group"><input type="number" inputmode="numeric" pattern="[0-9]*" id="ret-consumed-${item.historyId}" value="0" min="0" max="${qty}" readonly onchange="autoCalcGood(${item.historyId}, ${qty})"></td>
+          <td style="text-align: center;" class="qty-input-group"><input type="number" inputmode="numeric" pattern="[0-9]*" id="ret-good-${id}" value="${qty}" min="0" max="${qty}" readonly onchange="autoCalcConsumed(${id}, ${qty})"></td>
+          <td style="text-align: center;" class="qty-input-group"><input type="number" inputmode="numeric" pattern="[0-9]*" id="ret-consumed-${id}" value="0" min="0" max="${qty}" readonly onchange="autoCalcGood(${id}, ${qty})"></td>
           <td>${item.returnDate || '-'}</td>
         </tr>`;
       });
@@ -804,19 +810,66 @@
 
     async function loadHistory() {
       showLoader();
-      const history = await AppDB.getHistory();
-      renderHistoryTable(history);
+      try {
+        const historyData = await AppDB.getHistory();
+        renderHistoryTable(historyData);
+      } catch (err) {
+        console.error("Load History Error:", err);
+        hideLoader();
+        document.getElementById('history-table-container').innerHTML = '<p style="text-align:center; padding: 20px; color: red;">เกิดข้อผิดพลาดในการโหลดประวัติ</p>';
+      }
     }
 
-    function renderHistoryTable(history) {
-      dataCacheFlags.history = false; hideLoader(); const container = document.getElementById('history-table-container');
-      if(!history || history.length === 0 || history.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีประวัติการทำรายการ</p>'; return; }
+    function renderHistoryTable(historyData) {
+      dataCacheFlags.history = false; 
+      hideLoader(); 
+      const container = document.getElementById('history-table-container');
+      
+      const history = extractArray(historyData);
+
+      if(!history || history.length === 0) { 
+        container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีประวัติการทำรายการ</p>'; 
+        return; 
+      }
+
       let html = `<table><thead><tr><th>รหัส</th><th>ผู้ยืม</th><th>ชื่ออุปกรณ์</th><th>จำนวนยืม</th><th>วันที่ยืม</th><th>กำหนดคืน</th><th>สถานะ</th><th>คืนสภาพดี</th><th>ใช้ไป</th><th>วันที่คืนจริง</th><th>ผู้คืน</th></tr></thead><tbody id="hist-body">`;
+      
       history.forEach(h => {
-         let statusBadge = h.status === 'borrowed' ? '<span class="status-badge status-warning">กำลังยืม</span>' : '<span class="status-badge status-available">คืนแล้ว</span>';
-         html += `<tr><td>${h.historyId}</td><td>${h.borrowerName}</td><td>${h.itemName}</td><td style="text-align:center; font-weight:bold;">${h.borrowQty}</td><td>${h.borrowDate}</td><td>${h.returnDate || '-'}</td><td>${statusBadge}</td><td style="text-align:center;">${h.status==='returned' ? h.returnedQty : '-'}</td><td style="text-align:center; color: var(--danger);">${h.status==='returned' ? h.consumedQty : '-'}</td><td>${h.actualReturnDate || '-'}</td><td>${h.returnerName || '-'}</td></tr>`;
+         const id = h.historyId || h.id || h['รหัส'] || '-';
+         const borrower = h.borrowerName || h.borrower || h['ผู้ยืม'] || '-';
+         const item = h.itemName || h.item || h['ชื่ออุปกรณ์'] || '-';
+         const qty = h.borrowQty || h.qty || h['จำนวนยืม'] || 0;
+         const bDate = h.borrowDate || h['วันที่ยืม'] || '-';
+         const rDate = h.returnDate || h['กำหนดคืน'] || '-';
+         const statusRaw = (h.status || h['สถานะ'] || '').toString().toLowerCase();
+         const isReturned = statusRaw === 'returned' || statusRaw === 'คืนแล้ว';
+
+         const returnedQty = isReturned ? (h.returnedQty ?? h['คืนสภาพดี'] ?? '-') : '-';
+         const consumedQty = isReturned ? (h.consumedQty ?? h['ใช้ไป'] ?? '-') : '-';
+         const actualReturnDate = h.actualReturnDate || h['วันที่คืนจริง'] || '-';
+         const returnerName = h.returnerName || h['ผู้คืน'] || '-';
+
+         const statusBadge = isReturned 
+           ? '<span class="status-badge status-available">คืนแล้ว</span>' 
+           : '<span class="status-badge status-warning">กำลังยืม</span>';
+
+         html += `<tr>
+           <td>${id}</td>
+           <td>${borrower}</td>
+           <td>${item}</td>
+           <td style="text-align:center; font-weight:bold;">${qty}</td>
+           <td>${bDate}</td>
+           <td>${rDate}</td>
+           <td>${statusBadge}</td>
+           <td style="text-align:center;">${returnedQty}</td>
+           <td style="text-align:center; color: var(--danger);">${consumedQty}</td>
+           <td>${actualReturnDate}</td>
+           <td>${returnerName}</td>
+         </tr>`;
       });
-      html += `</tbody></table>`; container.innerHTML = html;
+      
+      html += `</tbody></table>`; 
+      container.innerHTML = html;
     }
 
     async function loadStats() {
@@ -881,9 +934,10 @@
 
     function renderManageItemsTable() {
          const container = document.getElementById('manage-items-table-container');
-         if(!currentManageItems || currentManageItems.length===0 || currentManageItems.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
+         const items = extractArray(currentManageItems);
+         if(!items || items.length===0) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
          let html = `<table><thead><tr><th>รูป</th><th>ชื่ออุปกรณ์</th><th>คำอธิบาย</th><th>ตั้งต้น</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
-         currentManageItems.forEach(item => {
+         items.forEach(item => {
             html += `<tr><td style="text-align:center;"><img src="${item.image}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
          });
          html += `</tbody></table>`; container.innerHTML = html;
@@ -894,7 +948,8 @@
     });
 
     function editItem(id) {
-         const item = currentManageItems.find(i => i.id == id); if(!item) return;
+         const items = extractArray(currentManageItems);
+         const item = items.find(i => i.id == id); if(!item) return;
          document.getElementById('item-id').value = item.id; document.getElementById('item-name').value = item.name; document.getElementById('item-description').value = item.description; document.getElementById('item-quantity').value = item.totalQuantity;
          const preview = document.getElementById('image-preview'); preview.src = item.image; preview.style.display = 'block'; document.getElementById('item-image-base64').value = item.image;
          document.getElementById('item-form-title').textContent = 'แก้ไขอุปกรณ์'; hideModal('manage-items-modal'); showModal('item-form-modal');
@@ -966,9 +1021,6 @@
       });
     }
 
-    // ==========================================
-    // ลอจิกการทำงานของระบบสแกน QR Code
-    // ==========================================
     document.getElementById('scan-qr-btn').addEventListener('click', () => {
       showModal('qr-modal');
       startScanner();
@@ -1002,7 +1054,8 @@
       stopScanner(); 
       
       const scannedId = decodedText.trim(); 
-      const item = window.allItems.find(i => i.id == scannedId || i.name.toLowerCase() == scannedId.toLowerCase());
+      const items = extractArray(window.allItems);
+      const item = items.find(i => i.id == scannedId || i.name.toLowerCase() == scannedId.toLowerCase());
       
       if (item) {
          if(item.availableQuantity > 0) {
