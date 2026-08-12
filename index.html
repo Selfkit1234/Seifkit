@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html>
+<html lang="th">
 <head>
   <base target="_top">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ระบบยืม-คืนอุปกรณ์ Self kit</title>
 
+  <!-- Google Tag Manager / Analytics -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -12,14 +14,17 @@
     gtag('js', new Date());
     gtag('config', 'G-XXXXXXXXXX');
   </script>
+  
+  <!-- External Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode"></script>
   
+  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;700&display=swap" rel="stylesheet">
   
   <style>
     /* General Styles */
@@ -288,7 +293,7 @@
         <div class="form-group"><label for="item-name">ชื่อของ</label><input type="text" id="item-name" required></div>
         <div class="form-group"><label for="item-description">คำอธิบาย</label><textarea id="item-description" rows="2" required></textarea></div>
         <div class="form-group"><label for="item-quantity">จำนวนทั้งหมด (ชิ้น)</label><input type="number" id="item-quantity" value="1" min="1" required></div>
-        <div class="form-group"><label>อัปโหลดรูปภาพ (ไม่เกิน 250KB)</label><input type="file" id="item-image-upload" accept="image/png, image/jpeg"><input type="hidden" id="item-image-base64"><img id="image-preview" src="#" style="max-height: 80px; display:none; margin-top:5px; border:1px solid #ccc;"></div>
+        <div class="form-group"><label>อัปโหลดรูปภาพ (ไม่เกิน 250KB)</label><input type="file" id="item-image-upload" accept="image/png, image/jpeg"><input type="hidden" id="item-image-base64"><img id="image-preview" src="#" alt="Preview" style="max-height: 80px; display:none; margin-top:5px; border:1px solid #ccc;"></div>
         <div class="modal-footer"><button type="submit" class="btn btn-primary">บันทึก</button></div>
       </form>
     </div>
@@ -306,7 +311,6 @@
     // ========================================================
     // การตั้งค่าเชื่อมต่อ Google Apps Script Web App (Backend)
     // ========================================================
-    // นำ URL ที่ได้จากการ Deploy Apps Script (ลงท้ายด้วย /exec) มาวางที่นี่
     const API_URL = "https://script.google.com/macros/s/AKfycbxyIKr4eHOkCkNxLx8C1rQu6kobokyCz8h0G4btncxi3pMnjvq8hBoriZ9fY0GytOlz1w/exec"; 
 
     const AppDB = {
@@ -325,7 +329,7 @@
           return await response.json();
         } catch (error) {
           console.error("API Connection Error:", error);
-          return { success: false, error: "เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์" };
+          return null;
         }
       },
 
@@ -600,7 +604,9 @@
     function showModal(id) { document.getElementById(id).style.display = 'block'; }
     function hideModal(id) { document.getElementById(id).style.display = 'none'; }
     
-    document.querySelectorAll('.close-btn[data-modal]').forEach(btn => { btn.addEventListener('click', () => hideModal(btn.dataset.modal)); });
+    document.querySelectorAll('.close-btn[data-modal]').forEach(btn => { 
+      btn.addEventListener('click', () => hideModal(btn.dataset.modal)); 
+    });
 
     document.getElementById('search-input').addEventListener('input', function(e) {
       const searchTerm = e.target.value.toLowerCase();
@@ -693,16 +699,22 @@
 
     function updateCartUI() {
       const cartItemsDiv = document.getElementById('cart-items'); cartItemsDiv.innerHTML = '';
-      cart.forEach((c) => { cartItemsDiv.innerHTML += `<div class="cart-item"><div style="flex-grow: 1;"><div style="font-weight: bold; font-size: 1em;">${c.name}</div><div style="font-size: 0.9em; color: var(--dark-gray); margin-top: 3px;">ยืม: <span style="font-weight: bold; color: var(--primary-color);">${c.requestQty}</span> ชิ้น</div></div><button class="remove-btn" onclick="toggleCart(${c.id})" title="ลบออก">&times;</button></div>`; });
-      document.getElementById('cart-toggle-btn').textContent = `ตะกร้า (${cart.length})`; document.getElementById('borrow-btn').disabled = cart.length === 0;
+      cart.forEach((c) => { 
+        cartItemsDiv.innerHTML += `<div class="cart-item"><div style="flex-grow: 1;"><div style="font-weight: bold; font-size: 1em;">${c.name}</div><div style="font-size: 0.9em; color: var(--dark-gray); margin-top: 3px;">ยืม: <span style="font-weight: bold; color: var(--primary-color);">${c.requestQty}</span> ชิ้น</div></div><button class="remove-btn" onclick="toggleCart(${c.id})" title="ลบออก">&times;</button></div>`; 
+      });
+      document.getElementById('cart-toggle-btn').textContent = `ตะกร้า (${cart.length})`; 
+      document.getElementById('borrow-btn').disabled = cart.length === 0;
     }
 
     document.getElementById('borrow-btn').addEventListener('click', () => {
-      document.getElementById('cart-container').classList.remove('open'); document.getElementById('borrow-form').reset();
-      const now = new Date(); const formattedNow = now.toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      document.getElementById('cart-container').classList.remove('open'); 
+      document.getElementById('borrow-form').reset();
+      const now = new Date(); 
+      const formattedNow = now.toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       document.getElementById('borrow-date-display').value = formattedNow;
       const todayDateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      document.getElementById('return-date').setAttribute('min', todayDateString); showModal('borrow-modal');
+      document.getElementById('return-date').setAttribute('min', todayDateString); 
+      showModal('borrow-modal');
     });
 
     document.getElementById('borrow-form').addEventListener('submit', async (e) => {
@@ -862,7 +874,17 @@
     }
 
     document.getElementById('show-manage-modal-btn').addEventListener('click', () => {
-      Swal.fire({ title: 'ยืนยันตัวตน', input: 'password', inputLabel: 'กรุณาใส่รหัสผ่านผู้ดูแลระบบ', inputPlaceholder: 'รหัสผ่าน...', showCancelButton: true, confirmButtonColor: 'var(--primary-color)', cancelButtonColor: 'var(--dark-gray)', confirmButtonText: 'เข้าสู่ระบบ', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณากรอกรหัสผ่าน!' }
+      Swal.fire({ 
+        title: 'ยืนยันตัวตน', 
+        input: 'password', 
+        inputLabel: 'กรุณาใส่รหัสผ่านผู้ดูแลระบบ', 
+        inputPlaceholder: 'รหัสผ่าน...', 
+        showCancelButton: true, 
+        confirmButtonColor: 'var(--primary-color)', 
+        cancelButtonColor: 'var(--dark-gray)', 
+        confirmButtonText: 'เข้าสู่ระบบ', 
+        cancelButtonText: 'ยกเลิก', 
+        inputValidator: (value) => { if (!value) return 'กรุณากรอกรหัสผ่าน!' }
       }).then((result) => {
         if (result.isConfirmed) {
           const adminPassword = '1234'; 
@@ -884,7 +906,7 @@
          if(!currentManageItems || currentManageItems.length===0 || currentManageItems.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
          let html = `<table><thead><tr><th>รูป</th><th>ชื่ออุปกรณ์</th><th>คำอธิบาย</th><th>ตั้งต้น</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
          currentManageItems.forEach(item => {
-            html += `<tr><td style="text-align:center;"><img src="${item.image}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
+            html += `<tr><td style="text-align:center;"><img src="${item.image}" alt="${item.name}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
          });
          html += `</tbody></table>`; container.innerHTML = html;
     }
