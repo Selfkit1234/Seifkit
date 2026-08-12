@@ -304,9 +304,31 @@
 
   <script>
     // ========================================================
-    // ฐานข้อมูลจำลอง (LocalStorage Database Layer) สำหรับ GitHub Pages
+    // การตั้งค่าเชื่อมต่อ Google Apps Script Web App (Backend)
     // ========================================================
+    // นำ URL ที่ได้จากการ Deploy Apps Script (ลงท้ายด้วย /exec) มาวางที่นี่
+    const API_URL = "วาง_URL_GOOGLE_APPS_SCRIPT_ที่นี่"; 
+
     const AppDB = {
+      async callAPI(action, payload = null, extra = {}) {
+        if (!API_URL || API_URL.includes("วาง_URL")) {
+          console.warn("ยังไม่ได้ตั้งค่า API_URL ใช้ข้อมูลจำลองชั่วคราว");
+          return null;
+        }
+        try {
+          const bodyData = { action: action, payload: payload, id: payload?.id, ...extra };
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(bodyData)
+          });
+          return await response.json();
+        } catch (error) {
+          console.error("API Connection Error:", error);
+          return { success: false, error: "เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์" };
+        }
+      },
+
       init() {
         if (!localStorage.getItem('med_items')) {
           const defaultItems = [
@@ -321,27 +343,33 @@
           localStorage.setItem('med_history', JSON.stringify([]));
         }
       },
-      getItems() {
+      async getItems() {
+        const apiRes = await this.callAPI('getItems');
+        if (apiRes) return apiRes;
         this.init();
         return JSON.parse(localStorage.getItem('med_items'));
       },
       saveItems(items) {
         localStorage.setItem('med_items', JSON.stringify(items));
       },
-      getHistory() {
+      async getHistory() {
+        const apiRes = await this.callAPI('getHistory');
+        if (apiRes) return apiRes;
         this.init();
         return JSON.parse(localStorage.getItem('med_history'));
       },
       saveHistory(history) {
         localStorage.setItem('med_history', JSON.stringify(history));
       },
-      processBorrow(payload) {
-        const items = this.getItems();
-        const history = this.getHistory();
+      async processBorrow(payload) {
+        const apiRes = await this.callAPI('processBorrow', payload);
+        if (apiRes) return apiRes;
+
+        const items = JSON.parse(localStorage.getItem('med_items'));
+        const history = JSON.parse(localStorage.getItem('med_history'));
         const now = new Date();
         const borrowDateStr = now.toLocaleDateString('th-TH') + ' ' + now.toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
 
-        // ตรวจสอบสต็อกก่อนยืม
         for (const bItem of payload.items) {
           const target = items.find(i => i.id == bItem.id);
           if (!target || target.availableQuantity < bItem.qty) {
@@ -349,11 +377,9 @@
           }
         }
 
-        // ตัดสต็อกและเพิ่มประวัติ
         payload.items.forEach(bItem => {
           const target = items.find(i => i.id == bItem.id);
           target.availableQuantity -= bItem.qty;
-
           const historyId = Math.floor(100000 + Math.random() * 900000);
           history.unshift({
             historyId: historyId,
@@ -375,17 +401,23 @@
         this.saveHistory(history);
         return { success: true };
       },
-      getBorrowedItems() {
-        const history = this.getHistory();
-        const items = this.getItems();
+      async getBorrowedItems() {
+        const apiRes = await this.callAPI('getBorrowedItems');
+        if (apiRes) return apiRes;
+
+        const history = await this.getHistory();
+        const items = await this.getItems();
         return history.filter(h => h.status === 'borrowed').map(h => {
           const itemDef = items.find(i => i.name === h.itemName);
           return { ...h, totalQuantity: itemDef ? itemDef.totalQuantity : 1 };
         });
       },
-      returnItems(payload) {
-        const history = this.getHistory();
-        const items = this.getItems();
+      async returnItems(payload) {
+        const apiRes = await this.callAPI('returnItems', payload);
+        if (apiRes) return apiRes;
+
+        const history = await this.getHistory();
+        const items = await this.getItems();
         const now = new Date();
         const returnDateStr = now.toLocaleDateString('th-TH') + ' ' + now.toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
 
@@ -398,11 +430,9 @@
             histRecord.actualReturnDate = returnDateStr;
             histRecord.returnerName = payload.returnerName;
 
-            // เพิ่มของกลับคืนสู่คลังพร้อมใช้งาน (คืนสภาพดี)
             const itemDef = items.find(i => i.name === histRecord.itemName);
             if (itemDef) {
               itemDef.availableQuantity += retItem.returnedQty;
-              // ส่วนที่ใช้สิ้นเปลือง ให้หักออกจากจำนวนทั้งหมดในระบบ
               itemDef.totalQuantity -= retItem.consumedQty;
             }
           }
@@ -412,8 +442,11 @@
         this.saveHistory(history);
         return { success: true, message: 'บันทึกการคืนเรียบร้อยแล้ว' };
       },
-      addItem(payload) {
-        const items = this.getItems();
+      async addItem(payload) {
+        const apiRes = await this.callAPI('addItem', payload);
+        if (apiRes) return apiRes;
+
+        const items = await this.getItems();
         const newId = items.length > 0 ? Math.max(...items.map(i => i.id)) + 1 : 1001;
         items.push({
           id: newId,
@@ -426,15 +459,18 @@
         this.saveItems(items);
         return { success: true };
       },
-      updateItem(payload) {
-        const items = this.getItems();
+      async updateItem(payload) {
+        const apiRes = await this.callAPI('updateItem', payload);
+        if (apiRes) return apiRes;
+
+        const items = await this.getItems();
         const target = items.find(i => i.id == payload.id);
         if (target) {
           const diff = parseInt(payload.quantity) - target.totalQuantity;
           target.name = payload.name;
           target.description = payload.description;
           target.totalQuantity = parseInt(payload.quantity);
-          target.availableQuantity += diff; // ปรับยอดพร้อมใช้งานตามส่วนต่างสต็อกใหม่
+          target.availableQuantity += diff;
           if (target.availableQuantity < 0) target.availableQuantity = 0;
           if (payload.image) target.image = payload.image;
           this.saveItems(items);
@@ -442,15 +478,21 @@
         }
         return { success: false, error: 'ไม่พบอุปกรณ์ที่ต้องการแก้ไข' };
       },
-      deleteItem(id) {
-        let items = this.getItems();
+      async deleteItem(id) {
+        const apiRes = await this.callAPI('deleteItem', null, { id: id });
+        if (apiRes) return apiRes;
+
+        let items = await this.getItems();
         items = items.filter(i => i.id != id);
         this.saveItems(items);
         return { success: true };
       },
-      getStats() {
-        const items = this.getItems();
-        const history = this.getHistory();
+      async getStats() {
+        const apiRes = await this.callAPI('getStats');
+        if (apiRes) return apiRes;
+
+        const items = await this.getItems();
+        const history = await this.getHistory();
 
         let totalItems = 0;
         let availableItems = 0;
@@ -467,7 +509,6 @@
           if (h.status === 'returned' && typeof h.consumedQty === 'number') totalConsumed += h.consumedQty;
         });
 
-        // คำนวณสถิติรายอุปกรณ์
         const itemUsageStats = items.map(item => {
           const itemBorrows = history.filter(h => h.itemName === item.name);
           const borrowTimes = itemBorrows.length;
@@ -492,7 +533,6 @@
           };
         });
 
-        // จัดอันดับของที่ถูกยืมบ่อยสุด
         const borrowCounts = {};
         history.forEach(h => {
           borrowCounts[h.itemName] = (borrowCounts[h.itemName] || 0) + 1;
@@ -515,7 +555,7 @@
     };
 
     // ========================================================
-    // ตัวแปรและฟังก์ชันควบคุมระบบหน้าบ้าน (Frontend logicเดิม)
+    // ตัวแปรและฟังก์ชันควบคุมระบบหน้าบ้าน (Frontend logic)
     // ========================================================
     let cart = []; 
     let allBorrowedItems = []; 
@@ -590,12 +630,10 @@
       }
     });
 
-    function loadItems() { 
+    async function loadItems() { 
       showLoader(); 
-      setTimeout(() => {
-        const items = AppDB.getItems();
-        displayItems(items);
-      }, 200);
+      const items = await AppDB.getItems();
+      displayItems(items);
     }
 
     function displayItems(items) {
@@ -667,30 +705,26 @@
       document.getElementById('return-date').setAttribute('min', todayDateString); showModal('borrow-modal');
     });
 
-    document.getElementById('borrow-form').addEventListener('submit', (e) => {
+    document.getElementById('borrow-form').addEventListener('submit', async (e) => {
       e.preventDefault(); showLoader();
       const payload = { borrowerName: document.getElementById('borrower-name').value, returnDate: document.getElementById('return-date').value, items: cart.map(c => ({ id: c.id, qty: c.requestQty })) };
       
-      setTimeout(() => {
-        const res = AppDB.processBorrow(payload);
-        hideLoader(); 
-        if(res.success) { 
-            showAlert('บันทึกการยืมเรียบร้อย!'); hideModal('borrow-modal'); cart = []; updateCartUI(); markDataStale(); 
-            if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
-        } else { showAlert(res.error, 'error'); }
-      }, 300);
+      const res = await AppDB.processBorrow(payload);
+      hideLoader(); 
+      if(res.success) { 
+          showAlert('บันทึกการยืมเรียบร้อย!'); hideModal('borrow-modal'); cart = []; updateCartUI(); markDataStale(); 
+          if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
+      } else { showAlert(res.error, 'error'); }
     });
 
-    function loadReturnItems() {
+    async function loadReturnItems() {
       showLoader();
-      setTimeout(() => {
-        window.allItems = AppDB.getItems();
-        fetchBorrowedItemsForReturn();
-      }, 200);
+      window.allItems = await AppDB.getItems();
+      await fetchBorrowedItemsForReturn();
     }
     
-    function fetchBorrowedItemsForReturn() {
-      const data = AppDB.getBorrowedItems();
+    async function fetchBorrowedItemsForReturn() {
+      const data = await AppDB.getBorrowedItems();
       allBorrowedItems = data || []; 
       dataCacheFlags.return = false; 
       document.getElementById('return-search-input').value = ''; 
@@ -748,7 +782,7 @@
 
     document.getElementById('return-selected-btn').addEventListener('click', () => {
       const selectedBtns = document.querySelectorAll('.return-toggle-btn[data-selected="true"]'); if(selectedBtns.length === 0) return;
-      Swal.fire({ title: 'ระบุชื่อ-นามสกุลผู้คืน', input: 'text', inputPlaceholder: 'กรอกชื่อ-นามสกุล', showCancelButton: true, confirmButtonText: 'ยืนยันคืน', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณาระบุชื่อ!' } }).then((result) => {
+      Swal.fire({ title: 'ระบุชื่อ-นามสกุลผู้คืน', input: 'text', inputPlaceholder: 'กรอกชื่อ-นามสกุล', showCancelButton: true, confirmButtonText: 'ยืนยันคืน', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณาระบุชื่อ!' } }).then(async (result) => {
         if (result.isConfirmed) {
           const returnPayload = { returnerName: result.value, items: [] };
           selectedBtns.forEach(btn => { 
@@ -761,21 +795,17 @@
           });
           
           showLoader(); 
-          setTimeout(() => {
-            const res = AppDB.returnItems(returnPayload);
-            hideLoader();
-            if(res.success){ showAlert(res.message); markDataStale(); loadReturnItems(); } else { showAlert(res.error, 'error'); }
-          }, 300);
+          const res = await AppDB.returnItems(returnPayload);
+          hideLoader();
+          if(res.success){ showAlert(res.message); markDataStale(); loadReturnItems(); } else { showAlert(res.error, 'error'); }
         } 
       }); 
     });
 
-    function loadHistory() {
+    async function loadHistory() {
       showLoader();
-      setTimeout(() => {
-        const history = AppDB.getHistory();
-        renderHistoryTable(history);
-      }, 200);
+      const history = await AppDB.getHistory();
+      renderHistoryTable(history);
     }
 
     function renderHistoryTable(history) {
@@ -789,12 +819,10 @@
       html += `</tbody></table>`; container.innerHTML = html;
     }
 
-    function loadStats() {
+    async function loadStats() {
       showLoader(); 
-      setTimeout(() => {
-        const stats = AppDB.getStats();
-        renderStats(stats);
-      }, 200);
+      const stats = await AppDB.getStats();
+      renderStats(stats);
     }
 
     function renderStats(stats) {
@@ -829,7 +857,7 @@
       const ctxPie = document.getElementById('statusPieChart').getContext('2d');
       myPieChart = new Chart(ctxPie, { type: 'doughnut', data: { labels: ['พร้อมยืม', 'ถูกยืม', 'ใช้สิ้นเปลือง'], datasets: [{ data: [stats.availableItems, stats.borrowedItems, stats.totalConsumed], backgroundColor: ['#10b981', '#f59e0b', '#ef4444'] }] } });
 
-      const topItems = stats.mostBorrowedItems.slice(0, 5); const ctxBar = document.getElementById('topItemsBarChart').getContext('2d');
+      const topItems = (stats.mostBorrowedItems || []).slice(0, 5); const ctxBar = document.getElementById('topItemsBarChart').getContext('2d');
       myBarChart = new Chart(ctxBar, { type: 'bar', data: { labels: topItems.map(i => i.name), datasets: [{ label: 'จำนวนครั้งที่ถูกยืม', data: topItems.map(i => i.count), backgroundColor: '#3b82f6' }] }, options: { scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } } });
     }
 
@@ -844,13 +872,11 @@
       });
     });
 
-    function loadManageItems() {
+    async function loadManageItems() {
        showLoader(); 
-       setTimeout(() => {
-         currentManageItems = AppDB.getItems(); 
-         renderManageItemsTable(); 
-         hideLoader(); 
-       }, 200);
+       currentManageItems = await AppDB.getItems(); 
+       renderManageItemsTable(); 
+       hideLoader(); 
     }
 
     function renderManageItemsTable() {
@@ -876,14 +902,12 @@
 
     function deleteItem(id) {
         Swal.fire({ title: 'ยืนยันการลบ?', text: "ต้องการลบใช่หรือไม่?", icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', cancelButtonColor: '#3085d6', confirmButtonText: 'ลบเลย!', cancelButtonText: 'ยกเลิก'
-        }).then((result) => {
+        }).then(async (result) => {
             if (result.isConfirmed) { 
               showLoader(); 
-              setTimeout(() => {
-                const res = AppDB.deleteItem(id);
-                hideLoader(); 
-                if(res.success) { showAlert('ลบสำเร็จ!'); markDataStale(); loadManageItems(); if(document.getElementById('items-view').classList.contains('active')) loadItems(); } else { showAlert(res.error, 'error'); }
-              }, 200);
+              const res = await AppDB.deleteItem(id);
+              hideLoader(); 
+              if(res.success) { showAlert('ลบสำเร็จ!'); markDataStale(); loadManageItems(); if(document.getElementById('items-view').classList.contains('active')) loadItems(); } else { showAlert(res.error, 'error'); }
             }
         });
     }
@@ -894,23 +918,21 @@
         const reader = new FileReader(); reader.onload = function(event) { const base64String = event.target.result; document.getElementById('item-image-base64').value = base64String; const preview = document.getElementById('image-preview'); preview.src = base64String; preview.style.display = 'block'; }; reader.readAsDataURL(file);
     });
 
-    document.getElementById('item-form').addEventListener('submit', function(e) {
+    document.getElementById('item-form').addEventListener('submit', async function(e) {
         e.preventDefault(); const id = document.getElementById('item-id').value;
         const payload = { id: id || null, name: document.getElementById('item-name').value, description: document.getElementById('item-description').value, quantity: document.getElementById('item-quantity').value, image: document.getElementById('item-image-base64').value };
         showLoader();
         
-        setTimeout(() => {
-          let res;
-          if(id) { res = AppDB.updateItem(payload); } 
-          else { res = AppDB.addItem(payload); }
-          
-          hideLoader();
-          if(res.success) { 
-            showAlert(id ? 'แก้ไขข้อมูลสำเร็จ!' : 'เพิ่มอุปกรณ์สำเร็จ!'); 
-            hideModal('item-form-modal'); showModal('manage-items-modal'); markDataStale(); loadManageItems(); 
-            if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
-          } else { showAlert(res.error, 'error'); }
-        }, 300);
+        let res;
+        if(id) { res = await AppDB.updateItem(payload); } 
+        else { res = await AppDB.addItem(payload); }
+        
+        hideLoader();
+        if(res.success) { 
+          showAlert(id ? 'แก้ไขข้อมูลสำเร็จ!' : 'เพิ่มอุปกรณ์สำเร็จ!'); 
+          hideModal('item-form-modal'); showModal('manage-items-modal'); markDataStale(); loadManageItems(); 
+          if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
+        } else { showAlert(res.error, 'error'); }
     });
 
     function exportStatsToPDF() {
@@ -980,7 +1002,6 @@
       stopScanner(); 
       
       const scannedId = decodedText.trim(); 
-      // ระบบรองรับการค้นหาจากไอดี (เช่น 1001) หรือ ชื่ออุปกรณ์เป๊ะๆ ที่ระบุใน QR Code
       const item = window.allItems.find(i => i.id == scannedId || i.name.toLowerCase() == scannedId.toLowerCase());
       
       if (item) {
