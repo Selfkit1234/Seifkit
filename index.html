@@ -657,7 +657,8 @@
       filtered.forEach(item => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td style="text-align:center;"><input type="checkbox" class="return-checkbox" value="${item.historyId}" onchange="updateReturnSelection()"></td>
+          <!-- แก้ไขตรงนี้: เพิ่ม 'this' เข้าไปใน updateReturnSelection เพื่อให้ตรวจสอบแค่ตัวที่ถูกคลิก -->
+          <td style="text-align:center;"><input type="checkbox" class="return-checkbox" value="${item.historyId}" onchange="updateReturnSelection(this)"></td>
           <td>${item.historyId}</td>
           <td>${item.itemName}</td>
           <td>${item.borrowerName}</td>
@@ -672,19 +673,32 @@
       hideLoader();
     }
 
-    window.updateReturnSelection = function() {
-      const checkboxes = document.querySelectorAll('.return-checkbox:checked');
+    // ฟังก์ชันได้รับการแก้ไขเพื่อให้ไม่ต้องวนลูปทุกบรรทัดทุกครั้งที่กด
+    window.updateReturnSelection = function(clickedCheckbox = null) {
+      // 1. จัดการเปิด/ปิดช่องกรอกข้อมูล เฉพาะแถวที่ถูกคลิกเท่านั้น (ไม่ต้องวนลูปทั้งหมด)
+      if (clickedCheckbox) {
+        const historyId = clickedCheckbox.value;
+        const retInput = document.getElementById(`ret-qty-${historyId}`);
+        const conInput = document.getElementById(`con-qty-${historyId}`);
+        if (retInput) retInput.disabled = !clickedCheckbox.checked;
+        if (conInput) conInput.disabled = !clickedCheckbox.checked;
+      } else {
+        // กรณีที่เรียกตอนโหลดตารางครั้งแรก ค่อยวนลูป
+        document.querySelectorAll('.return-checkbox').forEach(cb => {
+          const retInput = document.getElementById(`ret-qty-${cb.value}`);
+          const conInput = document.getElementById(`con-qty-${cb.value}`);
+          if (retInput) retInput.disabled = !cb.checked;
+          if (conInput) conInput.disabled = !cb.checked;
+        });
+      }
+
+      // 2. อัปเดตตัวเลขจำนวนที่เลือก และสถานะปุ่มยืนยัน
+      const checkedCount = document.querySelectorAll('.return-checkbox:checked').length;
       const btn = document.getElementById('return-selected-btn');
       
-      document.querySelectorAll('.return-checkbox').forEach(cb => {
-        const retInput = document.getElementById(`ret-qty-${cb.value}`);
-        const conInput = document.getElementById(`con-qty-${cb.value}`);
-        retInput.disabled = !cb.checked;
-        conInput.disabled = !cb.checked;
-      });
-
-      document.getElementById('return-count').textContent = checkboxes.length;
-      if(checkboxes.length > 0) {
+      document.getElementById('return-count').textContent = checkedCount;
+      
+      if (checkedCount > 0) {
         btn.disabled = false;
         btn.style.opacity = '1';
         btn.style.cursor = 'pointer';
