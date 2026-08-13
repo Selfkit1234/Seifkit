@@ -1,12 +1,10 @@
 <!DOCTYPE html>
-<html lang="th">
+<html>
 <head>
   <base target="_top">
-  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ระบบยืม-คืนอุปกรณ์และเวชภัณฑ์ทางการแพทย์ สาขาชุมชน</title>
 
-  <!-- Google Analytics (ปรับแก้ ID ได้) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -14,8 +12,6 @@
     gtag('js', new Date());
     gtag('config', 'G-XXXXXXXXXX');
   </script>
-
-  <!-- External Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -345,6 +341,7 @@
         const now = new Date();
         const borrowDateStr = now.toLocaleDateString('th-TH') + ' ' + now.toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
 
+        // ตรวจสอบสต็อกก่อนยืม
         for (const bItem of payload.items) {
           const target = items.find(i => i.id == bItem.id);
           if (!target || target.availableQuantity < bItem.qty) {
@@ -352,6 +349,7 @@
           }
         }
 
+        // ตัดสต็อกและเพิ่มประวัติ
         payload.items.forEach(bItem => {
           const target = items.find(i => i.id == bItem.id);
           target.availableQuantity -= bItem.qty;
@@ -400,9 +398,11 @@
             histRecord.actualReturnDate = returnDateStr;
             histRecord.returnerName = payload.returnerName;
 
+            // เพิ่มของกลับคืนสู่คลังพร้อมใช้งาน (คืนสภาพดี)
             const itemDef = items.find(i => i.name === histRecord.itemName);
             if (itemDef) {
               itemDef.availableQuantity += retItem.returnedQty;
+              // ส่วนที่ใช้สิ้นเปลือง ให้หักออกจากจำนวนทั้งหมดในระบบ
               itemDef.totalQuantity -= retItem.consumedQty;
             }
           }
@@ -434,7 +434,7 @@
           target.name = payload.name;
           target.description = payload.description;
           target.totalQuantity = parseInt(payload.quantity);
-          target.availableQuantity += diff;
+          target.availableQuantity += diff; // ปรับยอดพร้อมใช้งานตามส่วนต่างสต็อกใหม่
           if (target.availableQuantity < 0) target.availableQuantity = 0;
           if (payload.image) target.image = payload.image;
           this.saveItems(items);
@@ -467,6 +467,7 @@
           if (h.status === 'returned' && typeof h.consumedQty === 'number') totalConsumed += h.consumedQty;
         });
 
+        // คำนวณสถิติรายอุปกรณ์
         const itemUsageStats = items.map(item => {
           const itemBorrows = history.filter(h => h.itemName === item.name);
           const borrowTimes = itemBorrows.length;
@@ -491,6 +492,7 @@
           };
         });
 
+        // จัดอันดับของที่ถูกยืมบ่อยสุด
         const borrowCounts = {};
         history.forEach(h => {
           borrowCounts[h.itemName] = (borrowCounts[h.itemName] || 0) + 1;
@@ -513,7 +515,7 @@
     };
 
     // ========================================================
-    // ตัวแปรและฟังก์ชันควบคุมระบบหน้าบ้าน (Frontend Logic)
+    // ตัวแปรและฟังก์ชันควบคุมระบบหน้าบ้าน (Frontend logicเดิม)
     // ========================================================
     let cart = []; 
     let allBorrowedItems = []; 
@@ -522,7 +524,7 @@
     let currentManageItems = [];
     let html5QrCode = null;
     window.allItems = []; 
-
+    
     let dataCacheFlags = { items: true, return: true, history: true, stats: true };
     function markDataStale() { dataCacheFlags = { items: true, return: true, history: true, stats: true }; }
 
@@ -781,8 +783,8 @@
       if(!history || history.length === 0 || history.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีประวัติการทำรายการ</p>'; return; }
       let html = `<table><thead><tr><th>รหัส</th><th>ผู้ยืม</th><th>ชื่ออุปกรณ์</th><th>จำนวนยืม</th><th>วันที่ยืม</th><th>กำหนดคืน</th><th>สถานะ</th><th>คืนสภาพดี</th><th>ใช้ไป</th><th>วันที่คืนจริง</th><th>ผู้คืน</th></tr></thead><tbody id="hist-body">`;
       history.forEach(h => {
-          let statusBadge = h.status === 'borrowed' ? '<span class="status-badge status-warning">กำลังยืม</span>' : '<span class="status-badge status-available">คืนแล้ว</span>';
-          html += `<tr><td>${h.historyId}</td><td>${h.borrowerName}</td><td>${h.itemName}</td><td style="text-align:center; font-weight:bold;">${h.borrowQty}</td><td>${h.borrowDate}</td><td>${h.returnDate || '-'}</td><td>${statusBadge}</td><td style="text-align:center;">${h.status==='returned' ? h.returnedQty : '-'}</td><td style="text-align:center; color: var(--danger);">${h.status==='returned' ? h.consumedQty : '-'}</td><td>${h.actualReturnDate || '-'}</td><td>${h.returnerName || '-'}</td></tr>`;
+         let statusBadge = h.status === 'borrowed' ? '<span class="status-badge status-warning">กำลังยืม</span>' : '<span class="status-badge status-available">คืนแล้ว</span>';
+         html += `<tr><td>${h.historyId}</td><td>${h.borrowerName}</td><td>${h.itemName}</td><td style="text-align:center; font-weight:bold;">${h.borrowQty}</td><td>${h.borrowDate}</td><td>${h.returnDate || '-'}</td><td>${statusBadge}</td><td style="text-align:center;">${h.status==='returned' ? h.returnedQty : '-'}</td><td style="text-align:center; color: var(--danger);">${h.status==='returned' ? h.consumedQty : '-'}</td><td>${h.actualReturnDate || '-'}</td><td>${h.returnerName || '-'}</td></tr>`;
       });
       html += `</tbody></table>`; container.innerHTML = html;
     }
@@ -807,18 +809,18 @@
 
       const tbody = document.getElementById('usage-stats-body'); tbody.innerHTML = '';
       if(stats.itemUsageStats && stats.itemUsageStats.length > 0) {
-          stats.itemUsageStats.forEach(item => { 
-              tbody.innerHTML += `<tr>
-                  <td>${item.name}</td>
-                  <td style="text-align:center; font-weight:bold;">${item.initialTotal}</td>
-                  <td style="text-align:center; color:var(--danger); font-weight:bold;">${item.consumed}</td>
-                  <td style="text-align:center; color:#8b5cf6; font-weight:bold;">${item.currentTotal}</td>
-                  <td style="text-align:center; color:var(--warning); font-weight:bold;">${item.borrowed}</td>
-                  <td style="text-align:center; color:var(--success); font-weight:bold;">${item.available}</td>
-                  <td style="text-align:center; color:#6366f1; font-weight:bold;">${item.borrowTimes}</td>
-                  <td style="text-align:center; color:#14b8a6; font-weight:bold;">${item.returnTimes}</td>
-              </tr>`; 
-          });
+         stats.itemUsageStats.forEach(item => { 
+             tbody.innerHTML += `<tr>
+                 <td>${item.name}</td>
+                 <td style="text-align:center; font-weight:bold;">${item.initialTotal}</td>
+                 <td style="text-align:center; color:var(--danger); font-weight:bold;">${item.consumed}</td>
+                 <td style="text-align:center; color:#8b5cf6; font-weight:bold;">${item.currentTotal}</td>
+                 <td style="text-align:center; color:var(--warning); font-weight:bold;">${item.borrowed}</td>
+                 <td style="text-align:center; color:var(--success); font-weight:bold;">${item.available}</td>
+                 <td style="text-align:center; color:#6366f1; font-weight:bold;">${item.borrowTimes}</td>
+                 <td style="text-align:center; color:#14b8a6; font-weight:bold;">${item.returnTimes}</td>
+             </tr>`; 
+         });
       } else { 
           tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">ไม่มีข้อมูลสถิติรายอุปกรณ์</td></tr>'; 
       }
@@ -832,7 +834,7 @@
     }
 
     document.getElementById('show-manage-modal-btn').addEventListener('click', () => {
-      Swal.fire({ title: 'ยืนยันตัวตน', input: 'password', inputLabel: 'กรุณาใส่รหัสผ่านผู้ดูแลระบบ', inputPlaceholder: 'รหัสผ่าน...', showCancelButton: true, confirmButtonColor: 'var(--primary-color)', cancelButtonColor: 'var(--dark-gray)', confirmButtonText: 'เข้าสู่ระบบ', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณากรอกรหัสผ่าน!' }
+      Swal.fire({ title: 'ยืนยันตัวตน', input: 'password', inputLabel: 'กรุณาใส่รหัสผ่านผู้ดูแลระบบ (รหัสผ่านเริ่มต้น: 1234)', inputPlaceholder: 'รหัสผ่าน...', showCancelButton: true, confirmButtonColor: 'var(--primary-color)', cancelButtonColor: 'var(--dark-gray)', confirmButtonText: 'เข้าสู่ระบบ', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณากรอกรหัสผ่าน!' }
       }).then((result) => {
         if (result.isConfirmed) {
           const adminPassword = '1234'; 
@@ -845,31 +847,31 @@
     function loadManageItems() {
        showLoader(); 
        setTimeout(() => {
-          currentManageItems = AppDB.getItems(); 
-          renderManageItemsTable(); 
-          hideLoader(); 
+         currentManageItems = AppDB.getItems(); 
+         renderManageItemsTable(); 
+         hideLoader(); 
        }, 200);
     }
 
     function renderManageItemsTable() {
-          const container = document.getElementById('manage-items-table-container');
-          if(!currentManageItems || currentManageItems.length===0 || currentManageItems.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
-          let html = `<table><thead><tr><th>รูป</th><th>ชื่ออุปกรณ์</th><th>คำอธิบาย</th><th>ตั้งต้น</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
-          currentManageItems.forEach(item => {
-             html += `<tr><td style="text-align:center;"><img src="${item.image}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
-          });
-          html += `</tbody></table>`; container.innerHTML = html;
+         const container = document.getElementById('manage-items-table-container');
+         if(!currentManageItems || currentManageItems.length===0 || currentManageItems.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
+         let html = `<table><thead><tr><th>รูป</th><th>ชื่ออุปกรณ์</th><th>คำอธิบาย</th><th>ตั้งต้น</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
+         currentManageItems.forEach(item => {
+            html += `<tr><td style="text-align:center;"><img src="${item.image}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
+         });
+         html += `</tbody></table>`; container.innerHTML = html;
     }
 
     document.getElementById('open-add-new-item-form').addEventListener('click', () => {
-          document.getElementById('item-form').reset(); document.getElementById('item-id').value = ''; document.getElementById('image-preview').style.display = 'none'; document.getElementById('item-image-base64').value = ''; document.getElementById('item-form-title').textContent = 'เพิ่มอุปกรณ์ใหม่'; hideModal('manage-items-modal'); showModal('item-form-modal');
+         document.getElementById('item-form').reset(); document.getElementById('item-id').value = ''; document.getElementById('image-preview').style.display = 'none'; document.getElementById('item-image-base64').value = ''; document.getElementById('item-form-title').textContent = 'เพิ่มอุปกรณ์ใหม่'; hideModal('manage-items-modal'); showModal('item-form-modal');
     });
 
     function editItem(id) {
-          const item = currentManageItems.find(i => i.id == id); if(!item) return;
-          document.getElementById('item-id').value = item.id; document.getElementById('item-name').value = item.name; document.getElementById('item-description').value = item.description; document.getElementById('item-quantity').value = item.totalQuantity;
-          const preview = document.getElementById('image-preview'); preview.src = item.image; preview.style.display = 'block'; document.getElementById('item-image-base64').value = item.image;
-          document.getElementById('item-form-title').textContent = 'แก้ไขอุปกรณ์'; hideModal('manage-items-modal'); showModal('item-form-modal');
+         const item = currentManageItems.find(i => i.id == id); if(!item) return;
+         document.getElementById('item-id').value = item.id; document.getElementById('item-name').value = item.name; document.getElementById('item-description').value = item.description; document.getElementById('item-quantity').value = item.totalQuantity;
+         const preview = document.getElementById('image-preview'); preview.src = item.image; preview.style.display = 'block'; document.getElementById('item-image-base64').value = item.image;
+         document.getElementById('item-form-title').textContent = 'แก้ไขอุปกรณ์'; hideModal('manage-items-modal'); showModal('item-form-modal');
     }
 
     function deleteItem(id) {
@@ -978,7 +980,8 @@
       stopScanner(); 
       
       const scannedId = decodedText.trim(); 
-      const item = window.allItems.find(i => i.id == scannedId || i.name.toLowerCase() == scannedId.toLowerCase());
+      // รองรับการค้นหาจากไอดี (เช่น 1001) หรือ ชื่ออุปกรณ์ในระบบ
+      const item = window.allItems.find(i => i.id == scannedId || i.name.toLowerCase() === scannedId.toLowerCase());
       
       if (item) {
          if(item.availableQuantity > 0) {
@@ -992,20 +995,20 @@
                      btn.className = 'btn btn-secondary selected'; 
                      btn.textContent = 'เอาออก'; 
                  }
-                 showAlert(`เพิ่ม "${item.name}" ลงตะกร้าแล้ว!`, 'success');
+                 showAlert(`เพิ่ม "${item.name}" ลงในตะกร้าเรียบร้อยแล้ว!`, 'success');
              } else {
-                 showAlert(`"${item.name}" อยู่ในตะกร้าแล้ว!`, 'warning');
+                 showAlert(`"${item.name}" มีอยู่ในตะกร้าเรียบร้อยแล้ว`, 'info');
              }
          } else {
-             showAlert(`"${item.name}" หมดชั่วคราว! ไม่สามารถยืมได้`, 'error');
+             showAlert(`"${item.name}" หมดชั่วคราว ไม่สามารถยืมได้ในขณะนี้`, 'warning');
          }
       } else {
-         showAlert(`ไม่พบข้อมูลอุปกรณ์จากรหัส QR: ${scannedId}`, 'error');
+         showAlert(`ไม่พบอุปกรณ์ที่ตรงกับรหัส/ชื่อ: "${scannedId}"`, 'error');
       }
     }
 
     function onScanFailure(error) {
-      // สแกนเฟรมถัดไปอัตโนมัติ
+      // ปล่อยว่างไว้เพื่อป้องกันไม่ให้แสดง Alert บ่อยขณะกำลังค้นหาคิวอาร์โค้ด
     }
   </script>
 </body>
