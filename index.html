@@ -305,7 +305,6 @@
   <script>
     const API_URL = "https://script.google.com/macros/s/AKfycbxyIKr4eHOkCkNxLx8C1rQu6kobokyCz8h0G4btncxi3pMnjvq8hBoriZ9fY0GytOlz1w/exec"; 
 
-    // ฟังก์ชันช่วยแตกแกะข้อมูล Array ออกมาจาก Response Object
     function extractArray(response) {
       if (!response) return [];
       if (Array.isArray(response)) return response;
@@ -496,594 +495,563 @@
       },
       async getStats() {
         const apiRes = await this.callAPI('getStats');
-        if (apiRes) return apiRes;
+        if (apiRes && apiRes.totalItems !== undefined) return apiRes;
 
         const items = await this.getItems();
         const history = await this.getHistory();
 
         let totalItems = 0;
         let availableItems = 0;
-        let borrowedItems = 0;
         let totalConsumed = 0;
 
         items.forEach(i => {
           totalItems += i.totalQuantity;
           availableItems += i.availableQuantity;
         });
-
-        history.forEach(h => {
-          if (h.status === 'borrowed') borrowedItems += (h.borrowQty || 1);
-          if (h.status === 'returned' && typeof h.consumedQty === 'number') totalConsumed += h.consumedQty;
+        
+        let borrowedItems = totalItems - availableItems;
+        
+        let usageData = items.map(item => {
+            let itemHistory = history.filter(h => h.itemId == item.id || h.itemName === item.name);
+            let borrowCount = itemHistory.length;
+            let returnCount = itemHistory.filter(h => h.status === 'returned').length;
+            let consumed = itemHistory.reduce((sum, h) => sum + (parseInt(h.consumedQty) || 0), 0);
+            totalConsumed += consumed;
+            
+            return {
+                name: item.name,
+                startStock: item.totalQuantity + consumed,
+                consumed: consumed,
+                totalQuantity: item.totalQuantity,
+                borrowed: item.totalQuantity - item.availableQuantity,
+                available: item.availableQuantity,
+                borrowCount: borrowCount,
+                returnCount: returnCount
+            };
         });
-
-        const itemUsageStats = items.map(item => {
-          const itemBorrows = history.filter(h => h.itemName === item.name);
-          const borrowTimes = itemBorrows.length;
-          const returnTimes = itemBorrows.filter(h => h.status === 'returned').length;
-          
-          let consumed = 0;
-          let currentlyBorrowed = 0;
-          itemBorrows.forEach(h => {
-            if (h.status === 'borrowed') currentlyBorrowed += (h.borrowQty || 1);
-            if (h.status === 'returned' && typeof h.consumedQty === 'number') consumed += h.consumedQty;
-          });
-
-          return {
-            name: item.name,
-            initialTotal: item.totalQuantity + consumed,
-            consumed: consumed,
-            currentTotal: item.totalQuantity,
-            borrowed: currentlyBorrowed,
-            available: item.availableQuantity,
-            borrowTimes: borrowTimes,
-            returnTimes: returnTimes
-          };
-        });
-
-        const borrowCounts = {};
-        history.forEach(h => {
-          borrowCounts[h.itemName] = (borrowCounts[h.itemName] || 0) + 1;
-        });
-        const mostBorrowedItems = Object.keys(borrowCounts).map(name => ({
-          name: name,
-          count: borrowCounts[name]
-        })).sort((a,b) => b.count - a.count);
 
         return {
-          totalItems,
-          availableItems,
-          borrowedItems,
-          totalConsumed,
-          totalBorrows: history.length,
-          itemUsageStats,
-          mostBorrowedItems
+            totalItems,
+            availableItems,
+            borrowedItems,
+            totalConsumed,
+            usageData
         };
       }
     };
 
-    let cart = []; 
-    let allBorrowedItems = []; 
-    let myPieChart = null;
-    let myBarChart = null;
-    let currentManageItems = [];
-    let html5QrCode = null;
-    window.allItems = []; 
-    
-    let dataCacheFlags = { items: true, return: true, history: true, stats: true };
-    function markDataStale() { dataCacheFlags = { items: true, return: true, history: true, stats: true }; }
-
-    window.onload = () => { showView('items-view'); };
-
-    const views = document.querySelectorAll('.view');
-    const navButtons = document.querySelectorAll('.nav-btn');
-    document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
-      btn.addEventListener('click', (e) => { showView(e.target.dataset.view); });
-    });
-
-    function showView(viewId) {
-      views.forEach(v => v.classList.remove('active'));
-      document.getElementById(viewId).classList.add('active');
-      navButtons.forEach(btn => btn.classList.remove('active'));
-      
-      const targetBtn = document.querySelector(`[data-view="${viewId}"]`);
-      if(targetBtn) targetBtn.classList.add('active');
-
-      if (typeof gtag === 'function') {
-        gtag('event', 'page_view', { page_title: viewId, page_path: '/' + viewId });
-      }
-
-      if(viewId === 'items-view' && dataCacheFlags.items) loadItems();
-      else if(viewId === 'return-view' && dataCacheFlags.return) loadReturnItems();
-      else if(viewId === 'history-view' && dataCacheFlags.history) loadHistory();
-      else if(viewId === 'stats-view' && dataCacheFlags.stats) loadStats();
-    }
+    // UI Logic & State
+    let cart = [];
+    let currentItems = [];
+    let currentReturnItems = [];
+    let charts = [];
+    let html5QrcodeScanner = null;
 
     function showLoader() { document.getElementById('loader').style.display = 'flex'; }
     function hideLoader() { document.getElementById('loader').style.display = 'none'; }
-    function showAlert(msg, icon='success') { Swal.fire({ title: icon==='success'?'สำเร็จ!':'แจ้งเตือน!', text: msg, icon: icon }); }
-    function showModal(id) { document.getElementById(id).style.display = 'block'; }
-    function hideModal(id) { document.getElementById(id).style.display = 'none'; }
-    
-    document.querySelectorAll('.close-btn[data-modal]').forEach(btn => { btn.addEventListener('click', () => hideModal(btn.dataset.modal)); });
 
-    document.getElementById('search-input').addEventListener('input', function(e) {
-      const searchTerm = e.target.value.toLowerCase();
-      const itemCards = document.querySelectorAll('.item-card');
-      itemCards.forEach(card => {
-        const title = card.querySelector('h3').textContent.toLowerCase();
-        const desc = card.querySelector('p').textContent.toLowerCase();
-        if (title.includes(searchTerm) || desc.includes(searchTerm)) { card.style.display = 'flex'; } else { card.style.display = 'none'; }
-      });
-    });
-
-    document.getElementById('return-search-input').addEventListener('input', function(e) {
-      const searchTerm = e.target.value.toLowerCase();
-      const rows = document.querySelectorAll('#return-items-body tr');
-      rows.forEach(row => {
-        if (row.textContent.toLowerCase().includes(searchTerm)) { row.style.display = ''; } else { row.style.display = 'none'; }
-      });
-    });
-
-    document.getElementById('history-search-input').addEventListener('input', function(e) {
-      const searchTerm = e.target.value.toLowerCase();
-      const rows = document.querySelectorAll('#hist-body tr');
-      if(rows) {
-          rows.forEach(row => {
-            if (row.textContent.toLowerCase().includes(searchTerm)) { row.style.display = ''; } else { row.style.display = 'none'; }
-          });
-      }
-    });
-
-    async function loadItems() { 
-      showLoader(); 
-      const items = await AppDB.getItems();
-      displayItems(items);
-    }
-
-    function displayItems(items) {
-      dataCacheFlags.items = false; 
-      window.allItems = items || []; 
-      const grid = document.getElementById('items-grid'); grid.innerHTML = '';
-      if (!items || items.length === 0 || items.error) { grid.innerHTML = '<p>ไม่พบอุปกรณ์</p>'; hideLoader(); return; }
+    // Render Data
+    async function renderItems() {
+      showLoader();
+      currentItems = await AppDB.getItems();
+      const grid = document.getElementById('items-grid');
+      grid.innerHTML = '';
       
-      items.forEach(item => {
-        const inCart = cart.find(c => c.id == item.id);
-        const currentSelectedQty = inCart ? inCart.requestQty : 1; 
-        const card = document.createElement('div'); card.className = 'item-card';
-        let statusHtml = item.availableQuantity > 0 ? `<span class="status-badge status-available">คงเหลือ ${item.availableQuantity}</span>` : `<span class="status-badge status-borrowed">หมดชั่วคราว</span>`;
-        
-        const isSingle = item.totalQuantity === 1;
-        const labelHtml = isSingle ? `<label style="font-size: 0.85em; color: var(--dark-gray);">จำนวน:</label>` : `<label style="font-size: 0.9em; font-weight: bold; color: var(--danger);">ระบุจำนวน:</label>`;
-        const qtyInputHtml = isSingle 
-            ? `<input type="number" id="card-qty-${item.id}" value="1" disabled style="width: 45px; padding: 4px; text-align: center; border: 1px solid #ccc; border-radius: 4px; background-color: #e9ecef; cursor: not-allowed;" title="อุปกรณ์นี้มีชิ้นเดียวในระบบ">`
-            : `<input type="number" id="card-qty-${item.id}" value="${currentSelectedQty}" min="1" max="${item.availableQuantity}" style="width: 45px; padding: 4px; text-align: center; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;" ${item.availableQuantity <= 0 ? 'disabled' : ''} onchange="updateCardQtyIfInCart(${item.id}, ${item.availableQuantity})">`;
+      const search = document.getElementById('search-input').value.toLowerCase();
+      const filtered = currentItems.filter(i => i.name.toLowerCase().includes(search) || i.description.toLowerCase().includes(search) || String(i.id).includes(search));
 
-        card.innerHTML = `<img src="${item.image}" alt="${item.name}"><div class="item-card-content"><h3>${item.name}</h3><p>${item.description}</p><div class="item-card-footer"><div>${statusHtml}</div><div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;"><div style="display: flex; align-items: center; gap: 4px;">${labelHtml}${qtyInputHtml}</div><button id="add-btn-${item.id}" class="btn ${inCart ? 'btn-secondary selected' : 'btn-primary'}" style="flex-grow: 1;" ${item.availableQuantity <= 0 ? 'disabled' : ''} onclick="toggleCart(${item.id}, '${item.name}', ${item.availableQuantity})">${inCart ? 'เอาออก' : 'ใส่ตะกร้า'}</button></div></div></div>`;
+      filtered.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'item-card';
+        const isAvail = item.availableQuantity > 0;
+        
+        card.innerHTML = `
+          <img src="${item.image}" alt="${item.name}">
+          <div class="item-card-content">
+            <h3>${item.name}</h3>
+            <p>${item.description}</p>
+            <div class="item-card-footer">
+              <span class="status-badge ${isAvail ? 'status-available' : 'status-borrowed'}">
+                ${isAvail ? `พร้อมยืม: ${item.availableQuantity} / ${item.totalQuantity}` : 'ของหมด'}
+              </span>
+              <button class="btn btn-primary" onclick="addToCart(${item.id})" ${!isAvail ? 'disabled' : ''}>+ เพิ่มลงตะกร้า</button>
+            </div>
+          </div>
+        `;
         grid.appendChild(card);
       });
       hideLoader();
     }
 
-    document.getElementById('cart-toggle-btn').addEventListener('click', () => { document.getElementById('cart-container').classList.add('open'); });
-    document.getElementById('cart-close-btn').addEventListener('click', () => { document.getElementById('cart-container').classList.remove('open'); });
-
-    function updateCardQtyIfInCart(id, maxQty) {
-       const existingIndex = cart.findIndex(c => c.id == id);
-       if (existingIndex >= 0) {
-          const qtyInput = document.getElementById('card-qty-' + id); let reqQty = parseInt(qtyInput.value) || 1;
-          if (reqQty > maxQty) { reqQty = maxQty; qtyInput.value = maxQty; } if (reqQty < 1) { reqQty = 1; qtyInput.value = 1; }
-          cart[existingIndex].requestQty = reqQty; updateCartUI();
-       }
+    function addToCart(id) {
+      const item = currentItems.find(i => i.id == id);
+      const inCart = cart.find(c => c.id == id);
+      
+      if(inCart) {
+        if(inCart.qty < item.availableQuantity) {
+            inCart.qty++;
+            updateCartUI();
+            Swal.fire({ icon: 'success', title: 'เพิ่มจำนวนแล้ว', timer: 1000, showConfirmButton: false });
+        } else {
+            Swal.fire({ icon: 'warning', title: 'จำนวนไม่พอ', text: 'คุณเลือกจำนวนสูงสุดที่มีแล้ว' });
+        }
+      } else {
+        cart.push({ id: item.id, name: item.name, qty: 1, max: item.availableQuantity });
+        updateCartUI();
+        Swal.fire({ icon: 'success', title: 'เพิ่มลงตะกร้าแล้ว', timer: 1000, showConfirmButton: false });
+      }
     }
 
-    function toggleCart(id, name, maxQty) {
-      const existingIndex = cart.findIndex(c => c.id == id);
-      if (existingIndex >= 0) { cart.splice(existingIndex, 1); } 
-      else {
-          const qtyInput = document.getElementById('card-qty-' + id); 
-          let reqQty = parseInt(qtyInput.value) || 1;
-          if (reqQty > maxQty) reqQty = maxQty; if (reqQty < 1) reqQty = 1; 
-          cart.push({ id: id, name: name, maxQty: maxQty, requestQty: reqQty });
-      }
-      
-      updateCartUI(); 
-      const btn = document.getElementById('add-btn-' + id);
-      if(btn) {
-          const inCart = cart.findIndex(c => c.id == id) >= 0;
-          if(inCart) { btn.className = 'btn btn-secondary selected'; btn.textContent = 'เอาออก'; } 
-          else { btn.className = 'btn btn-primary'; btn.textContent = 'ใส่ตะกร้า'; }
-      }
+    function removeFromCart(id) {
+      cart = cart.filter(c => c.id != id);
+      updateCartUI();
     }
 
     function updateCartUI() {
-      const cartItemsDiv = document.getElementById('cart-items'); cartItemsDiv.innerHTML = '';
-      cart.forEach((c) => { cartItemsDiv.innerHTML += `<div class="cart-item"><div style="flex-grow: 1;"><div style="font-weight: bold; font-size: 1em;">${c.name}</div><div style="font-size: 0.9em; color: var(--dark-gray); margin-top: 3px;">ยืม: <span style="font-weight: bold; color: var(--primary-color);">${c.requestQty}</span> ชิ้น</div></div><button class="remove-btn" onclick="toggleCart(${c.id})" title="ลบออก">&times;</button></div>`; });
-      document.getElementById('cart-toggle-btn').textContent = `ตะกร้า (${cart.length})`; document.getElementById('borrow-btn').disabled = cart.length === 0;
-    }
-
-    document.getElementById('borrow-btn').addEventListener('click', () => {
-      document.getElementById('cart-container').classList.remove('open'); document.getElementById('borrow-form').reset();
-      const now = new Date(); const formattedNow = now.toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      document.getElementById('borrow-date-display').value = formattedNow;
-      const todayDateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      document.getElementById('return-date').setAttribute('min', todayDateString); showModal('borrow-modal');
-    });
-
-    document.getElementById('borrow-form').addEventListener('submit', async (e) => {
-      e.preventDefault(); showLoader();
-      const payload = { borrowerName: document.getElementById('borrower-name').value, returnDate: document.getElementById('return-date').value, items: cart.map(c => ({ id: c.id, qty: c.requestQty })) };
+      const btn = document.getElementById('cart-toggle-btn');
+      btn.textContent = `ตะกร้า (${cart.length})`;
       
-      const res = await AppDB.processBorrow(payload);
-      hideLoader(); 
-      if(res.success) { 
-          showAlert('บันทึกการยืมเรียบร้อย!'); hideModal('borrow-modal'); cart = []; updateCartUI(); markDataStale(); 
-          if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
-      } else { showAlert(res.error, 'error'); }
-    });
+      const container = document.getElementById('cart-items');
+      container.innerHTML = '';
+      
+      cart.forEach(item => {
+        container.innerHTML += `
+          <div class="cart-item">
+            <div style="flex-grow:1">
+              <div style="font-weight:bold; font-size:0.9em;">${item.name}</div>
+              <div style="display:flex; align-items:center; gap:5px; margin-top:5px;">
+                <input type="number" min="1" max="${item.max}" value="${item.qty}" style="width:40px; text-align:center" onchange="updateCartQty(${item.id}, this.value)">
+                <span style="font-size:0.8em; color:var(--dark-gray);">/ ${item.max}</span>
+              </div>
+            </div>
+            <button class="remove-btn" onclick="removeFromCart(${item.id})">×</button>
+          </div>
+        `;
+      });
 
-    async function loadReturnItems() {
-      showLoader();
-      window.allItems = await AppDB.getItems();
-      await fetchBorrowedItemsForReturn();
+      document.getElementById('borrow-btn').disabled = cart.length === 0;
     }
-    
-    async function fetchBorrowedItemsForReturn() {
-      const data = await AppDB.getBorrowedItems();
-      allBorrowedItems = extractArray(data); 
-      dataCacheFlags.return = false; 
-      document.getElementById('return-search-input').value = ''; 
-      renderReturnTable(allBorrowedItems); 
+
+    function updateCartQty(id, val) {
+      const item = cart.find(c => c.id == id);
+      val = parseInt(val);
+      if(val > 0 && val <= item.max) item.qty = val;
+      else if(val > item.max) item.qty = item.max;
+      else item.qty = 1;
+      updateCartUI();
+    }
+
+    async function renderReturnItems() {
+      showLoader();
+      currentReturnItems = await AppDB.getBorrowedItems();
+      const tbody = document.getElementById('return-items-body');
+      tbody.innerHTML = '';
+      
+      const search = document.getElementById('return-search-input').value.toLowerCase();
+      const filtered = currentReturnItems.filter(i => 
+        i.itemName.toLowerCase().includes(search) || 
+        i.borrowerName.toLowerCase().includes(search) || 
+        String(i.historyId).includes(search)
+      );
+
+      filtered.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="text-align:center;"><input type="checkbox" class="return-checkbox" value="${item.historyId}" onchange="updateReturnSelection()"></td>
+          <td>${item.historyId}</td>
+          <td>${item.itemName}</td>
+          <td>${item.borrowerName}</td>
+          <td style="text-align:center;">${item.borrowQty}</td>
+          <td class="qty-input-group"><input type="number" id="ret-qty-${item.historyId}" value="${item.borrowQty}" min="0" max="${item.borrowQty}" disabled></td>
+          <td class="qty-input-group"><input type="number" id="con-qty-${item.historyId}" value="0" min="0" max="${item.borrowQty}" disabled></td>
+          <td>${item.returnDate}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      updateReturnSelection();
       hideLoader();
     }
 
-    function renderReturnTable(items) {
-      const tbody = document.getElementById('return-items-body'); tbody.innerHTML = '';
-      const list = extractArray(items);
-      if(!list || list.length === 0) { tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;">ไม่มีรายการที่ต้องคืน</td></tr>`; return; }
+    window.updateReturnSelection = function() {
+      const checkboxes = document.querySelectorAll('.return-checkbox:checked');
+      const btn = document.getElementById('return-selected-btn');
       
-      list.forEach(item => {
-        const id = item.historyId || item.id || '-';
-        const qty = item.borrowQty || item.qty || 1; 
-        let systemQty = 1;
-        if (window.allItems) { const sysItem = window.allItems.find(i => i.name === item.itemName); if (sysItem) { systemQty = sysItem.totalQuantity; } }
-        systemQty = item.totalQuantity || systemQty; 
-        
-        tbody.innerHTML += `<tr>
-          <td style="text-align: center;"><button type="button" class="btn btn-primary return-toggle-btn" data-id="${id}" data-selected="false" data-system-qty="${systemQty}" onclick="toggleReturnBtn(this)" style="font-size: 12px; padding: 6px 10px;">กดเลือก</button></td>
-          <td>${id}</td>
-          <td>${item.itemName || '-'}</td>
-          <td>${item.borrowerName || '-'}</td>
-          <td style="text-align: center; font-weight: bold;">${qty}</td>
-          <td style="text-align: center;" class="qty-input-group"><input type="number" inputmode="numeric" pattern="[0-9]*" id="ret-good-${id}" value="${qty}" min="0" max="${qty}" readonly onchange="autoCalcConsumed(${id}, ${qty})"></td>
-          <td style="text-align: center;" class="qty-input-group"><input type="number" inputmode="numeric" pattern="[0-9]*" id="ret-consumed-${id}" value="0" min="0" max="${qty}" readonly onchange="autoCalcGood(${id}, ${qty})"></td>
-          <td>${item.returnDate || '-'}</td>
+      document.querySelectorAll('.return-checkbox').forEach(cb => {
+        const retInput = document.getElementById(`ret-qty-${cb.value}`);
+        const conInput = document.getElementById(`con-qty-${cb.value}`);
+        retInput.disabled = !cb.checked;
+        conInput.disabled = !cb.checked;
+      });
+
+      document.getElementById('return-count').textContent = checkboxes.length;
+      if(checkboxes.length > 0) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+      } else {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        btn.style.cursor = 'not-allowed';
+      }
+    };
+
+    async function renderHistory() {
+      showLoader();
+      const history = await AppDB.getHistory();
+      const container = document.getElementById('history-table-container');
+      const search = document.getElementById('history-search-input').value.toLowerCase();
+      
+      const filtered = history.filter(h => 
+        h.itemName.toLowerCase().includes(search) || 
+        h.borrowerName.toLowerCase().includes(search)
+      );
+
+      let html = `<table><thead><tr><th>รหัสอ้างอิง</th><th>ผู้ยืม</th><th>ชื่ออุปกรณ์</th><th>จำนวน</th><th>วันที่ยืม</th><th>กำหนดคืน</th><th>สถานะ</th><th>วันที่คืนจริง</th></tr></thead><tbody>`;
+      filtered.forEach(h => {
+        const isRet = h.status === 'returned';
+        html += `<tr>
+          <td>${h.historyId}</td>
+          <td>${h.borrowerName}</td>
+          <td>${h.itemName}</td>
+          <td>${h.borrowQty}</td>
+          <td>${h.borrowDate}</td>
+          <td>${h.returnDate}</td>
+          <td><span class="status-badge ${isRet ? 'status-available' : 'status-warning'}">${isRet ? 'คืนแล้ว' : 'กำลังยืม'}</span></td>
+          <td>${isRet ? h.actualReturnDate : '-'}</td>
         </tr>`;
       });
-      updateReturnCount();
-    }
-
-    function toggleReturnBtn(btn) {
-        const id = btn.dataset.id; const isSelected = btn.dataset.selected === 'true'; const systemQty = parseInt(btn.dataset.systemQty) || 1;
-        const goodInput = document.getElementById(`ret-good-${id}`); const consumedInput = document.getElementById(`ret-consumed-${id}`);
-        if (isSelected) {
-            btn.dataset.selected = 'false'; btn.className = 'btn btn-primary return-toggle-btn'; btn.textContent = 'กดเลือก';
-            goodInput.readOnly = true; consumedInput.readOnly = true; goodInput.classList.remove('highlight-input'); consumedInput.classList.remove('highlight-input'); goodInput.style.backgroundColor = ''; consumedInput.style.backgroundColor = ''; goodInput.style.cursor = ''; consumedInput.style.cursor = '';
-        } else {
-            btn.dataset.selected = 'true'; btn.className = 'btn btn-secondary return-toggle-btn selected'; btn.textContent = 'เลือกแล้ว';
-            if (systemQty > 1) { goodInput.readOnly = false; consumedInput.readOnly = false; goodInput.style.backgroundColor = ''; consumedInput.style.backgroundColor = ''; goodInput.style.cursor = 'text'; consumedInput.style.cursor = 'text'; } 
-            else { goodInput.readOnly = true; consumedInput.readOnly = true; goodInput.style.backgroundColor = '#e9ecef'; consumedInput.style.backgroundColor = '#e9ecef'; goodInput.style.cursor = 'not-allowed'; consumedInput.style.cursor = 'not-allowed'; }
-            goodInput.classList.add('highlight-input'); consumedInput.classList.add('highlight-input'); goodInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-        updateReturnCount();
-    }
-
-    function autoCalcConsumed(id, total) { const g = document.getElementById(`ret-good-${id}`); const c = document.getElementById(`ret-consumed-${id}`); let v = parseInt(g.value) || 0; if (v > total) v = total; if (v < 0) v = 0; g.value = v; c.value = total - v; }
-    function autoCalcGood(id, total) { const g = document.getElementById(`ret-good-${id}`); const c = document.getElementById(`ret-consumed-${id}`); let v = parseInt(c.value) || 0; if (v > total) v = total; if (v < 0) v = 0; c.value = v; g.value = total - v; }
-
-    function updateReturnCount() {
-      const selectedCount = document.querySelectorAll('.return-toggle-btn[data-selected="true"]').length;
-      const btn = document.getElementById('return-selected-btn'); document.getElementById('return-count').textContent = selectedCount;
-      if (selectedCount > 0) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; } else { btn.disabled = true; btn.style.opacity = '0.5'; btn.style.cursor = 'not-allowed'; }
-    }
-
-    document.getElementById('return-selected-btn').addEventListener('click', () => {
-      const selectedBtns = document.querySelectorAll('.return-toggle-btn[data-selected="true"]'); if(selectedBtns.length === 0) return;
-      Swal.fire({ title: 'ระบุชื่อ-นามสกุลผู้คืน', input: 'text', inputPlaceholder: 'กรอกชื่อ-นามสกุล', showCancelButton: true, confirmButtonText: 'ยืนยันคืน', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณาระบุชื่อ!' } }).then(async (result) => {
-        if (result.isConfirmed) {
-          const returnPayload = { returnerName: result.value, items: [] };
-          selectedBtns.forEach(btn => { 
-            const id = btn.dataset.id; 
-            returnPayload.items.push({ 
-              historyId: id, 
-              returnedQty: parseInt(document.getElementById(`ret-good-${id}`).value) || 0, 
-              consumedQty: parseInt(document.getElementById(`ret-consumed-${id}`).value) || 0 
-            }); 
-          });
-          
-          showLoader(); 
-          const res = await AppDB.returnItems(returnPayload);
-          hideLoader();
-          if(res.success){ showAlert(res.message); markDataStale(); loadReturnItems(); } else { showAlert(res.error, 'error'); }
-        } 
-      }); 
-    });
-
-    async function loadHistory() {
-      showLoader();
-      try {
-        const historyData = await AppDB.getHistory();
-        renderHistoryTable(historyData);
-      } catch (err) {
-        console.error("Load History Error:", err);
-        hideLoader();
-        document.getElementById('history-table-container').innerHTML = '<p style="text-align:center; padding: 20px; color: red;">เกิดข้อผิดพลาดในการโหลดประวัติ</p>';
-      }
-    }
-
-    function renderHistoryTable(historyData) {
-      dataCacheFlags.history = false; 
-      hideLoader(); 
-      const container = document.getElementById('history-table-container');
-      
-      const history = extractArray(historyData);
-
-      if(!history || history.length === 0) { 
-        container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีประวัติการทำรายการ</p>'; 
-        return; 
-      }
-
-      let html = `<table><thead><tr><th>รหัส</th><th>ผู้ยืม</th><th>ชื่ออุปกรณ์</th><th>จำนวนยืม</th><th>วันที่ยืม</th><th>กำหนดคืน</th><th>สถานะ</th><th>คืนสภาพดี</th><th>ใช้ไป</th><th>วันที่คืนจริง</th><th>ผู้คืน</th></tr></thead><tbody id="hist-body">`;
-      
-      history.forEach(h => {
-         const id = h.historyId || h.id || h['รหัส'] || '-';
-         const borrower = h.borrowerName || h.borrower || h['ผู้ยืม'] || '-';
-         const item = h.itemName || h.item || h['ชื่ออุปกรณ์'] || '-';
-         const qty = h.borrowQty || h.qty || h['จำนวนยืม'] || 0;
-         const bDate = h.borrowDate || h['วันที่ยืม'] || '-';
-         const rDate = h.returnDate || h['กำหนดคืน'] || '-';
-         const statusRaw = (h.status || h['สถานะ'] || '').toString().toLowerCase();
-         const isReturned = statusRaw === 'returned' || statusRaw === 'คืนแล้ว';
-
-         const returnedQty = isReturned ? (h.returnedQty ?? h['คืนสภาพดี'] ?? '-') : '-';
-         const consumedQty = isReturned ? (h.consumedQty ?? h['ใช้ไป'] ?? '-') : '-';
-         const actualReturnDate = h.actualReturnDate || h['วันที่คืนจริง'] || '-';
-         const returnerName = h.returnerName || h['ผู้คืน'] || '-';
-
-         const statusBadge = isReturned 
-           ? '<span class="status-badge status-available">คืนแล้ว</span>' 
-           : '<span class="status-badge status-warning">กำลังยืม</span>';
-
-         html += `<tr>
-           <td>${id}</td>
-           <td>${borrower}</td>
-           <td>${item}</td>
-           <td style="text-align:center; font-weight:bold;">${qty}</td>
-           <td>${bDate}</td>
-           <td>${rDate}</td>
-           <td>${statusBadge}</td>
-           <td style="text-align:center;">${returnedQty}</td>
-           <td style="text-align:center; color: var(--danger);">${consumedQty}</td>
-           <td>${actualReturnDate}</td>
-           <td>${returnerName}</td>
-         </tr>`;
-      });
-      
-      html += `</tbody></table>`; 
+      html += `</tbody></table>`;
       container.innerHTML = html;
+      hideLoader();
     }
 
-    async function loadStats() {
-      showLoader(); 
+    async function renderStats() {
+      showLoader();
       const stats = await AppDB.getStats();
-      renderStats(stats);
-    }
-
-    function renderStats(stats) {
-      dataCacheFlags.stats = false; hideLoader(); if(stats.error) { showAlert(stats.error, 'error'); return; }
       
+      // Update Grid Cards
       document.getElementById('stats-grid').innerHTML = `
-        <div class="stat-card"><div class="value">${stats.totalItems}</div><div class="label">ทั้งหมด (ชิ้น)</div></div>
-        <div class="stat-card"><div class="value" style="color:var(--success);">${stats.availableItems}</div><div class="label">พร้อมใช้งาน (ชิ้น)</div></div>
-        <div class="stat-card"><div class="value" style="color:var(--warning);">${stats.borrowedItems}</div><div class="label">กำลังถูกยืม (ชิ้น)</div></div>
-        <div class="stat-card"><div class="value" style="color:var(--danger);">${stats.totalConsumed}</div><div class="label">สิ้นเปลือง (ชิ้น)</div></div>
-        <div class="stat-card"><div class="value" style="color:#8b5cf6;">${stats.totalBorrows}</div><div class="label">ประวัติ (ครั้ง)</div></div>`;
+        <div class="stat-card"><div class="value">${stats.totalItems}</div><div class="label">จำนวนชิ้นทั้งหมด (สะสม)</div></div>
+        <div class="stat-card"><div class="value" style="color:var(--success)">${stats.availableItems}</div><div class="label">พร้อมใช้งานตอนนี้</div></div>
+        <div class="stat-card"><div class="value" style="color:var(--warning)">${stats.borrowedItems}</div><div class="label">กำลังถูกยืม</div></div>
+        <div class="stat-card"><div class="value" style="color:var(--danger)">${stats.totalConsumed}</div><div class="label">ใช้แล้วทิ้ง/ชำรุด</div></div>
+      `;
 
-      const tbody = document.getElementById('usage-stats-body'); tbody.innerHTML = '';
-      if(stats.itemUsageStats && stats.itemUsageStats.length > 0) {
-         stats.itemUsageStats.forEach(item => { 
-             tbody.innerHTML += `<tr>
-                 <td>${item.name}</td>
-                 <td style="text-align:center; font-weight:bold;">${item.initialTotal}</td>
-                 <td style="text-align:center; color:var(--danger); font-weight:bold;">${item.consumed}</td>
-                 <td style="text-align:center; color:#8b5cf6; font-weight:bold;">${item.currentTotal}</td>
-                 <td style="text-align:center; color:var(--warning); font-weight:bold;">${item.borrowed}</td>
-                 <td style="text-align:center; color:var(--success); font-weight:bold;">${item.available}</td>
-                 <td style="text-align:center; color:#6366f1; font-weight:bold;">${item.borrowTimes}</td>
-                 <td style="text-align:center; color:#14b8a6; font-weight:bold;">${item.returnTimes}</td>
-             </tr>`; 
-         });
-      } else { 
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">ไม่มีข้อมูลสถิติรายอุปกรณ์</td></tr>'; 
-      }
+      // Update Table
+      let tbody = '';
+      stats.usageData.forEach(d => {
+        tbody += `<tr>
+          <td>${d.name}</td>
+          <td style="text-align:center;">${d.startStock}</td>
+          <td style="text-align:center;">${d.consumed}</td>
+          <td style="text-align:center; font-weight:bold;">${d.totalQuantity}</td>
+          <td style="text-align:center; color:var(--warning);">${d.borrowed}</td>
+          <td style="text-align:center; color:var(--success); font-weight:bold;">${d.available}</td>
+          <td style="text-align:center;">${d.borrowCount}</td>
+          <td style="text-align:center;">${d.returnCount}</td>
+        </tr>`;
+      });
+      document.getElementById('usage-stats-body').innerHTML = tbody;
 
-      if(myPieChart) myPieChart.destroy(); if(myBarChart) myBarChart.destroy();
+      // Update Charts
+      charts.forEach(c => c.destroy());
+      charts = [];
+
       const ctxPie = document.getElementById('statusPieChart').getContext('2d');
-      myPieChart = new Chart(ctxPie, { type: 'doughnut', data: { labels: ['พร้อมยืม', 'ถูกยืม', 'ใช้สิ้นเปลือง'], datasets: [{ data: [stats.availableItems, stats.borrowedItems, stats.totalConsumed], backgroundColor: ['#10b981', '#f59e0b', '#ef4444'] }] } });
+      charts.push(new Chart(ctxPie, {
+        type: 'doughnut',
+        data: {
+          labels: ['พร้อมใช้งาน', 'กำลังถูกยืม'],
+          datasets: [{ data: [stats.availableItems, stats.borrowedItems], backgroundColor: ['#10b981', '#f59e0b'] }]
+        }
+      }));
 
-      const topItems = (stats.mostBorrowedItems || []).slice(0, 5); const ctxBar = document.getElementById('topItemsBarChart').getContext('2d');
-      myBarChart = new Chart(ctxBar, { type: 'bar', data: { labels: topItems.map(i => i.name), datasets: [{ label: 'จำนวนครั้งที่ถูกยืม', data: topItems.map(i => i.count), backgroundColor: '#3b82f6' }] }, options: { scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } } });
+      const topBorrowed = [...stats.usageData].sort((a,b) => b.borrowCount - a.borrowCount).slice(0,5);
+      const ctxBar = document.getElementById('topItemsBarChart').getContext('2d');
+      charts.push(new Chart(ctxBar, {
+        type: 'bar',
+        data: {
+          labels: topBorrowed.map(d => d.name),
+          datasets: [{ label: 'จำนวนครั้งที่ถูกยืม', data: topBorrowed.map(d => d.borrowCount), backgroundColor: '#4a69bd' }]
+        },
+        options: { scales: { y: { beginAtZero: true } } }
+      }));
+
+      hideLoader();
     }
 
-    document.getElementById('show-manage-modal-btn').addEventListener('click', () => {
-      Swal.fire({ title: 'ยืนยันตัวตน', input: 'password', inputLabel: 'กรุณาใส่รหัสผ่านผู้ดูแลระบบ', inputPlaceholder: 'รหัสผ่าน...', showCancelButton: true, confirmButtonColor: 'var(--primary-color)', cancelButtonColor: 'var(--dark-gray)', confirmButtonText: 'เข้าสู่ระบบ', cancelButtonText: 'ยกเลิก', inputValidator: (value) => { if (!value) return 'กรุณากรอกรหัสผ่าน!' }
-      }).then((result) => {
-        if (result.isConfirmed) {
-          const adminPassword = '1234'; 
-          if (result.value === adminPassword) { loadManageItems(); showModal('manage-items-modal'); } 
-          else { Swal.fire({ icon: 'error', title: 'รหัสผิด!', text: 'ไม่มีสิทธิ์เข้าถึง', confirmButtonColor: 'var(--danger)', confirmButtonText: 'ปิด' }); }
+    async function renderManageItems() {
+        showLoader();
+        const items = await AppDB.getItems();
+        const container = document.getElementById('manage-items-table-container');
+        let html = `<table><thead><tr><th>ID</th><th>รูป</th><th>ชื่ออุปกรณ์</th><th>จำนวนทั้งหมด</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
+        items.forEach(item => {
+            html += `<tr>
+                <td>${item.id}</td>
+                <td><img src="${item.image}" style="height:40px; width:40px; object-fit:contain;"></td>
+                <td>${item.name}</td>
+                <td>${item.totalQuantity}</td>
+                <td>${item.availableQuantity}</td>
+                <td>
+                    <button class="btn btn-edit" onclick="editItem(${item.id})">แก้ไข</button>
+                    <button class="btn btn-delete" onclick="deleteItem(${item.id})">ลบ</button>
+                </td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+        hideLoader();
+    }
+
+    // Export PDF
+    window.exportStatsToPDF = function() {
+        const element = document.getElementById('usage-stats-container');
+        html2pdf().from(element).set({
+            margin: 10,
+            filename: 'self_kit_stats.pdf',
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2 },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
+        }).save();
+    }
+
+    // Event Listeners Initialization
+    document.addEventListener('DOMContentLoaded', () => {
+      // Views Navigation
+      document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+          e.target.classList.add('active');
+          document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+          const viewId = e.target.getAttribute('data-view');
+          document.getElementById(viewId).classList.add('active');
+          
+          if(viewId === 'items-view') renderItems();
+          if(viewId === 'return-view') renderReturnItems();
+          if(viewId === 'history-view') renderHistory();
+          if(viewId === 'stats-view') renderStats();
+        });
+      });
+
+      // Searches
+      document.getElementById('search-input').addEventListener('input', renderItems);
+      document.getElementById('return-search-input').addEventListener('input', renderReturnItems);
+      document.getElementById('history-search-input').addEventListener('input', renderHistory);
+
+      // Cart Toggles
+      document.getElementById('cart-toggle-btn').addEventListener('click', () => {
+        document.getElementById('cart-container').classList.add('open');
+      });
+      document.getElementById('cart-close-btn').addEventListener('click', () => {
+        document.getElementById('cart-container').classList.remove('open');
+      });
+
+      // Modals Closing
+      document.querySelectorAll('.close-btn[data-modal]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          document.getElementById(e.target.getAttribute('data-modal')).style.display = 'none';
+        });
+      });
+
+      // Borrow Form
+      document.getElementById('borrow-btn').addEventListener('click', () => {
+        const now = new Date();
+        document.getElementById('borrow-date-display').value = now.toLocaleDateString('th-TH') + ' ' + now.toLocaleTimeString('th-TH');
+        document.getElementById('borrow-modal').style.display = 'block';
+        document.getElementById('cart-container').classList.remove('open');
+      });
+
+      document.getElementById('borrow-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const borrowerName = document.getElementById('borrower-name').value;
+        const returnDate = document.getElementById('return-date').value;
+        
+        showLoader();
+        const res = await AppDB.processBorrow({ borrowerName, returnDate, items: cart });
+        hideLoader();
+        
+        if(res.success) {
+            Swal.fire('สำเร็จ', 'บันทึกการยืมเรียบร้อยแล้ว', 'success');
+            cart = [];
+            updateCartUI();
+            document.getElementById('borrow-modal').style.display = 'none';
+            document.getElementById('borrow-form').reset();
+            renderItems();
+        } else {
+            Swal.fire('ข้อผิดพลาด', res.error, 'error');
         }
       });
-    });
 
-    async function loadManageItems() {
-       showLoader(); 
-       currentManageItems = await AppDB.getItems(); 
-       renderManageItemsTable(); 
-       hideLoader(); 
-    }
-
-    function renderManageItemsTable() {
-         const container = document.getElementById('manage-items-table-container');
-         const items = extractArray(currentManageItems);
-         if(!items || items.length===0) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
-         let html = `<table><thead><tr><th>รูป</th><th>ชื่ออุปกรณ์</th><th>คำอธิบาย</th><th>ตั้งต้น</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
-         items.forEach(item => {
-            html += `<tr><td style="text-align:center;"><img src="${item.image}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
-         });
-         html += `</tbody></table>`; container.innerHTML = html;
-    }
-
-    document.getElementById('open-add-new-item-form').addEventListener('click', () => {
-         document.getElementById('item-form').reset(); document.getElementById('item-id').value = ''; document.getElementById('image-preview').style.display = 'none'; document.getElementById('item-image-base64').value = ''; document.getElementById('item-form-title').textContent = 'เพิ่มอุปกรณ์ใหม่'; hideModal('manage-items-modal'); showModal('item-form-modal');
-    });
-
-    function editItem(id) {
-         const items = extractArray(currentManageItems);
-         const item = items.find(i => i.id == id); if(!item) return;
-         document.getElementById('item-id').value = item.id; document.getElementById('item-name').value = item.name; document.getElementById('item-description').value = item.description; document.getElementById('item-quantity').value = item.totalQuantity;
-         const preview = document.getElementById('image-preview'); preview.src = item.image; preview.style.display = 'block'; document.getElementById('item-image-base64').value = item.image;
-         document.getElementById('item-form-title').textContent = 'แก้ไขอุปกรณ์'; hideModal('manage-items-modal'); showModal('item-form-modal');
-    }
-
-    function deleteItem(id) {
-        Swal.fire({ title: 'ยืนยันการลบ?', text: "ต้องการลบใช่หรือไม่?", icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', cancelButtonColor: '#3085d6', confirmButtonText: 'ลบเลย!', cancelButtonText: 'ยกเลิก'
-        }).then(async (result) => {
-            if (result.isConfirmed) { 
-              showLoader(); 
-              const res = await AppDB.deleteItem(id);
-              hideLoader(); 
-              if(res.success) { showAlert('ลบสำเร็จ!'); markDataStale(); loadManageItems(); if(document.getElementById('items-view').classList.contains('active')) loadItems(); } else { showAlert(res.error, 'error'); }
-            }
+      // Return Selected
+      document.getElementById('return-selected-btn').addEventListener('click', async () => {
+        const checkboxes = document.querySelectorAll('.return-checkbox:checked');
+        const itemsToReturn = Array.from(checkboxes).map(cb => {
+            const historyId = cb.value;
+            return {
+                historyId: historyId,
+                returnedQty: parseInt(document.getElementById(`ret-qty-${historyId}`).value) || 0,
+                consumedQty: parseInt(document.getElementById(`con-qty-${historyId}`).value) || 0
+            };
         });
-    }
 
-    document.getElementById('item-image-upload').addEventListener('change', function(e) {
-        const file = e.target.files[0]; if (!file) return;
-        if (file.size > 250 * 1024) { showAlert('ขนาดไฟล์เกิน 250KB กรุณาย่อขนาดรูป', 'warning'); e.target.value = ''; return; }
-        const reader = new FileReader(); reader.onload = function(event) { const base64String = event.target.result; document.getElementById('item-image-base64').value = base64String; const preview = document.getElementById('image-preview'); preview.src = base64String; preview.style.display = 'block'; }; reader.readAsDataURL(file);
-    });
+        const { value: returnerName } = await Swal.fire({
+            title: 'ชื่อผู้คืน',
+            input: 'text',
+            inputPlaceholder: 'กรอกชื่อ-สกุลผู้คืน',
+            showCancelButton: true,
+            inputValidator: (value) => { if (!value) return 'กรุณากรอกชื่อผู้คืน!' }
+        });
 
-    document.getElementById('item-form').addEventListener('submit', async function(e) {
-        e.preventDefault(); const id = document.getElementById('item-id').value;
-        const payload = { id: id || null, name: document.getElementById('item-name').value, description: document.getElementById('item-description').value, quantity: document.getElementById('item-quantity').value, image: document.getElementById('item-image-base64').value };
-        showLoader();
-        
-        let res;
-        if(id) { res = await AppDB.updateItem(payload); } 
-        else { res = await AppDB.addItem(payload); }
-        
-        hideLoader();
-        if(res.success) { 
-          showAlert(id ? 'แก้ไขข้อมูลสำเร็จ!' : 'เพิ่มอุปกรณ์สำเร็จ!'); 
-          hideModal('item-form-modal'); showModal('manage-items-modal'); markDataStale(); loadManageItems(); 
-          if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
-        } else { showAlert(res.error, 'error'); }
-    });
-
-    function exportStatsToPDF() {
-      showLoader();
-      const element = document.getElementById('usage-stats-container');
-      const tableContainer = element.querySelector('.table-container');
-      
-      const originalMaxHeight = tableContainer.style.maxHeight;
-      const originalOverflow = tableContainer.style.overflow;
-      tableContainer.style.maxHeight = 'none';
-      tableContainer.style.overflow = 'visible';
-
-      const opt = {
-        margin:       10, 
-        filename:     'สรุปสถิติอุปกรณ์.pdf', 
-        image:        { type: 'jpeg', quality: 1 },
-        html2canvas:  { scale: 2 }, 
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
-      };
-
-      html2pdf().set(opt).from(element).save().then(() => {
-        tableContainer.style.maxHeight = originalMaxHeight;
-        tableContainer.style.overflow = originalOverflow;
-        hideLoader();
-        showAlert('ดาวน์โหลด PDF สำเร็จ!');
-      }).catch(err => {
-        tableContainer.style.maxHeight = originalMaxHeight;
-        tableContainer.style.overflow = originalOverflow;
-        hideLoader();
-        showAlert('เกิดข้อผิดพลาดในการโหลด PDF: ' + err.message, 'error');
+        if (returnerName) {
+            showLoader();
+            const res = await AppDB.returnItems({ returnerName, items: itemsToReturn });
+            hideLoader();
+            if(res.success) {
+                Swal.fire('สำเร็จ', 'บันทึกการคืนเรียบร้อย', 'success');
+                renderReturnItems();
+            } else {
+                Swal.fire('ข้อผิดพลาด', res.error, 'error');
+            }
+        }
       });
-    }
 
-    document.getElementById('scan-qr-btn').addEventListener('click', () => {
-      showModal('qr-modal');
-      startScanner();
-    });
-
-    document.getElementById('close-qr-btn').addEventListener('click', () => {
-      stopScanner();
-    });
-
-    function startScanner() {
-      html5QrCode = new Html5Qrcode("reader");
-      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-      
-      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
-      .catch((err) => {
-         showAlert("ไม่สามารถเปิดกล้องได้ กรุณาตรวจสอบสิทธิ์การเข้าถึงกล้อง", "error");
-         hideModal('qr-modal');
+      // Manage Items
+      document.getElementById('show-manage-modal-btn').addEventListener('click', () => {
+        document.getElementById('manage-items-modal').style.display = 'block';
+        renderManageItems();
       });
-    }
 
-    function stopScanner() {
-      if (html5QrCode) {
-        html5QrCode.stop().then(() => {
-          html5QrCode.clear();
-        }).catch(err => console.log(err));
-      }
-      hideModal('qr-modal');
-    }
+      document.getElementById('open-add-new-item-form').addEventListener('click', () => {
+        document.getElementById('item-form').reset();
+        document.getElementById('item-id').value = '';
+        document.getElementById('image-preview').style.display = 'none';
+        document.getElementById('item-form-title').innerText = 'เพิ่มอุปกรณ์ใหม่';
+        document.getElementById('item-form-modal').style.display = 'block';
+      });
 
-    function onScanSuccess(decodedText, decodedResult) {
-      stopScanner(); 
-      
-      const scannedId = decodedText.trim(); 
-      const items = extractArray(window.allItems);
-      const item = items.find(i => i.id == scannedId || i.name.toLowerCase() == scannedId.toLowerCase());
-      
-      if (item) {
-         if(item.availableQuantity > 0) {
-             const existingIndex = cart.findIndex(c => c.id == item.id);
-             if (existingIndex === -1) {
-                 cart.push({ id: item.id, name: item.name, maxQty: item.availableQuantity, requestQty: 1 });
-                 updateCartUI();
-                 
-                 const btn = document.getElementById('add-btn-' + item.id);
-                 if(btn) { 
-                     btn.className = 'btn btn-secondary selected'; 
-                     btn.textContent = 'เอาออก'; 
-                 }
-                 showAlert(`เพิ่ม "${item.name}" ลงตะกร้าแล้ว!`, 'success');
-             } else {
-                 showAlert(`"${item.name}" อยู่ในตะกร้าแล้ว!`, 'warning');
-             }
-         } else {
-             showAlert(`"${item.name}" หมดชั่วคราว! ไม่สามารถยืมได้`, 'error');
-         }
-      } else {
-         showAlert(`ไม่พบข้อมูลอุปกรณ์จากรหัส QR: ${scannedId}`, 'error');
-      }
-    }
+      document.getElementById('item-image-upload').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if(!file) return;
+        if(file.size > 250000) {
+            Swal.fire('ข้อผิดพลาด', 'ขนาดรูปต้องไม่เกิน 250KB', 'error');
+            e.target.value = '';
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            document.getElementById('item-image-base64').value = event.target.result;
+            const imgPreview = document.getElementById('image-preview');
+            imgPreview.src = event.target.result;
+            imgPreview.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+      });
 
-    function onScanFailure(error) {
-      // สแกนเฟรมถัดไปอัตโนมัติ
-    }
+      document.getElementById('item-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const id = document.getElementById('item-id').value;
+          const payload = {
+              name: document.getElementById('item-name').value,
+              description: document.getElementById('item-description').value,
+              quantity: document.getElementById('item-quantity').value,
+              image: document.getElementById('item-image-base64').value
+          };
+          
+          showLoader();
+          let res;
+          if(id) {
+              payload.id = id;
+              res = await AppDB.updateItem(payload);
+          } else {
+              res = await AppDB.addItem(payload);
+          }
+          hideLoader();
+
+          if(res.success) {
+              Swal.fire('สำเร็จ', 'บันทึกข้อมูลเรียบร้อย', 'success');
+              document.getElementById('item-form-modal').style.display = 'none';
+              renderManageItems();
+              if(document.getElementById('items-view').classList.contains('active')) renderItems();
+          } else {
+              Swal.fire('ข้อผิดพลาด', res.error, 'error');
+          }
+      });
+
+      // QR Scanner Logic
+      document.getElementById('scan-qr-btn').addEventListener('click', () => {
+        document.getElementById('qr-modal').style.display = 'block';
+        if (!html5QrcodeScanner) {
+            html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+            html5QrcodeScanner.render((decodedText) => {
+                const searchInput = document.getElementById('search-input');
+                searchInput.value = decodedText;
+                document.getElementById('qr-modal').style.display = 'none';
+                html5QrcodeScanner.clear();
+                html5QrcodeScanner = null;
+                renderItems();
+                Swal.fire({ icon: 'success', title: 'สแกนสำเร็จ', text: `ค้นหา: ${decodedText}`, timer: 1500, showConfirmButton: false });
+            }, (error) => { /* ignore */ });
+        }
+      });
+
+      document.getElementById('close-qr-btn').addEventListener('click', () => {
+          document.getElementById('qr-modal').style.display = 'none';
+          if(html5QrcodeScanner) {
+              html5QrcodeScanner.clear();
+              html5QrcodeScanner = null;
+          }
+      });
+
+      // Initial Render
+      renderItems();
+    });
+
+    // Edit/Delete Item Global Functions
+    window.editItem = async function(id) {
+        const items = await AppDB.getItems();
+        const item = items.find(i => i.id == id);
+        if(item) {
+            document.getElementById('item-id').value = item.id;
+            document.getElementById('item-name').value = item.name;
+            document.getElementById('item-description').value = item.description;
+            document.getElementById('item-quantity').value = item.totalQuantity;
+            document.getElementById('item-image-base64').value = item.image || '';
+            const preview = document.getElementById('image-preview');
+            if(item.image) {
+                preview.src = item.image;
+                preview.style.display = 'block';
+            } else {
+                preview.style.display = 'none';
+            }
+            document.getElementById('item-form-title').innerText = 'แก้ไขอุปกรณ์';
+            document.getElementById('item-form-modal').style.display = 'block';
+        }
+    };
+
+    window.deleteItem = async function(id) {
+        const result = await Swal.fire({
+            title: 'ยืนยันการลบ?',
+            text: "ข้อมูลอุปกรณ์จะถูกลบและไม่สามารถกู้คืนได้!",
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#ef4444',
+            cancelButtonColor: '#6b7280',
+            confirmButtonText: 'ลบเลย',
+            cancelButtonText: 'ยกเลิก'
+        });
+
+        if (result.isConfirmed) {
+            showLoader();
+            const res = await AppDB.deleteItem(id);
+            hideLoader();
+            if(res.success) {
+                Swal.fire('ลบสำเร็จ!', 'ลบอุปกรณ์เรียบร้อยแล้ว.', 'success');
+                renderManageItems();
+            } else {
+                Swal.fire('ข้อผิดพลาด', 'ไม่สามารถลบได้', 'error');
+            }
+        }
+    };
   </script>
 </body>
 </html>
