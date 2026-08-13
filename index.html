@@ -22,7 +22,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;700&display=swap" rel="stylesheet">
   
   <style>
-    /* General Styles */
     :root { 
       --primary-color: #4a69bd; 
       --secondary-color: #6a89cc; 
@@ -303,220 +302,6 @@
   </div>
 
   <script>
-    // ========================================================
-    // ฐานข้อมูลจำลอง (LocalStorage Database Layer) สำหรับ GitHub Pages
-    // ========================================================
-    const AppDB = {
-      init() {
-        if (!localStorage.getItem('med_items')) {
-          const defaultItems = [
-            { id: 1001, name: "เครื่องผลิตออกซิเจน 5 ลิตร", description: "สำหรับผู้ป่วยพักฟื้นที่บ้าน", totalQuantity: 3, availableQuantity: 3, image: "https://via.placeholder.com/150?text=Oxygen+Concentrator" },
-            { id: 1002, name: "เครื่องวัดความดันโลหิต", description: "เครื่องวัดความดันระบบดิจิทัล พกพาง่าย", totalQuantity: 5, availableQuantity: 5, image: "https://via.placeholder.com/150?text=BP+Monitor" },
-            { id: 1003, name: "รถเข็นผู้ป่วย (Wheelchair)", description: "รถเข็นพับได้ โครงสร้างอลูมิเนียมน้ำหนักเบา", totalQuantity: 2, availableQuantity: 2, image: "https://via.placeholder.com/150?text=Wheelchair" },
-            { id: 1004, name: "เครื่องวัดออกซิเจนปลายนิ้ว", description: "ใช้ตรวจวัดระดับออกซิเจนในเลือดเบื้องต้น", totalQuantity: 10, availableQuantity: 10, image: "https://via.placeholder.com/150?text=Pulse+Oximeter" }
-          ];
-          localStorage.setItem('med_items', JSON.stringify(defaultItems));
-        }
-        if (!localStorage.getItem('med_history')) {
-          localStorage.setItem('med_history', JSON.stringify([]));
-        }
-      },
-      getItems() {
-        this.init();
-        return JSON.parse(localStorage.getItem('med_items'));
-      },
-      saveItems(items) {
-        localStorage.setItem('med_items', JSON.stringify(items));
-      },
-      getHistory() {
-        this.init();
-        return JSON.parse(localStorage.getItem('med_history'));
-      },
-      saveHistory(history) {
-        localStorage.setItem('med_history', JSON.stringify(history));
-      },
-      processBorrow(payload) {
-        const items = this.getItems();
-        const history = this.getHistory();
-        const now = new Date();
-        const borrowDateStr = now.toLocaleDateString('th-TH') + ' ' + now.toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
-
-        // ตรวจสอบสต็อกก่อนยืม
-        for (const bItem of payload.items) {
-          const target = items.find(i => i.id == bItem.id);
-          if (!target || target.availableQuantity < bItem.qty) {
-            return { success: false, error: `ขออภัย "${target?target.name:'ไม่ทราบชื่อ'}" มีจำนวนไม่พอให้ยืม` };
-          }
-        }
-
-        // ตัดสต็อกและเพิ่มประวัติ
-        payload.items.forEach(bItem => {
-          const target = items.find(i => i.id == bItem.id);
-          target.availableQuantity -= bItem.qty;
-
-          const historyId = Math.floor(100000 + Math.random() * 900000);
-          history.unshift({
-            historyId: historyId,
-            borrowerName: payload.borrowerName,
-            itemName: target.name,
-            itemId: target.id,
-            borrowQty: bItem.qty,
-            borrowDate: borrowDateStr,
-            returnDate: payload.returnDate,
-            status: 'borrowed',
-            returnedQty: '-',
-            consumedQty: '-',
-            actualReturnDate: '-',
-            returnerName: '-'
-          });
-        });
-
-        this.saveItems(items);
-        this.saveHistory(history);
-        return { success: true };
-      },
-      getBorrowedItems() {
-        const history = this.getHistory();
-        const items = this.getItems();
-        return history.filter(h => h.status === 'borrowed').map(h => {
-          const itemDef = items.find(i => i.name === h.itemName);
-          return { ...h, totalQuantity: itemDef ? itemDef.totalQuantity : 1 };
-        });
-      },
-      returnItems(payload) {
-        const history = this.getHistory();
-        const items = this.getItems();
-        const now = new Date();
-        const returnDateStr = now.toLocaleDateString('th-TH') + ' ' + now.toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
-
-        payload.items.forEach(retItem => {
-          const histRecord = history.find(h => h.historyId == retItem.historyId);
-          if (histRecord) {
-            histRecord.status = 'returned';
-            histRecord.returnedQty = retItem.returnedQty;
-            histRecord.consumedQty = retItem.consumedQty;
-            histRecord.actualReturnDate = returnDateStr;
-            histRecord.returnerName = payload.returnerName;
-
-            // เพิ่มของกลับคืนสู่คลังพร้อมใช้งาน (คืนสภาพดี)
-            const itemDef = items.find(i => i.name === histRecord.itemName);
-            if (itemDef) {
-              itemDef.availableQuantity += retItem.returnedQty;
-              // ส่วนที่ใช้สิ้นเปลือง ให้หักออกจากจำนวนทั้งหมดในระบบ
-              itemDef.totalQuantity -= retItem.consumedQty;
-            }
-          }
-        });
-
-        this.saveItems(items);
-        this.saveHistory(history);
-        return { success: true, message: 'บันทึกการคืนเรียบร้อยแล้ว' };
-      },
-      addItem(payload) {
-        const items = this.getItems();
-        const newId = items.length > 0 ? Math.max(...items.map(i => i.id)) + 1 : 1001;
-        items.push({
-          id: newId,
-          name: payload.name,
-          description: payload.description,
-          totalQuantity: parseInt(payload.quantity),
-          availableQuantity: parseInt(payload.quantity),
-          image: payload.image || "https://via.placeholder.com/150?text=No+Image"
-        });
-        this.saveItems(items);
-        return { success: true };
-      },
-      updateItem(payload) {
-        const items = this.getItems();
-        const target = items.find(i => i.id == payload.id);
-        if (target) {
-          const diff = parseInt(payload.quantity) - target.totalQuantity;
-          target.name = payload.name;
-          target.description = payload.description;
-          target.totalQuantity = parseInt(payload.quantity);
-          target.availableQuantity += diff; // ปรับยอดพร้อมใช้งานตามส่วนต่างสต็อกใหม่
-          if (target.availableQuantity < 0) target.availableQuantity = 0;
-          if (payload.image) target.image = payload.image;
-          this.saveItems(items);
-          return { success: true };
-        }
-        return { success: false, error: 'ไม่พบอุปกรณ์ที่ต้องการแก้ไข' };
-      },
-      deleteItem(id) {
-        let items = this.getItems();
-        items = items.filter(i => i.id != id);
-        this.saveItems(items);
-        return { success: true };
-      },
-      getStats() {
-        const items = this.getItems();
-        const history = this.getHistory();
-
-        let totalItems = 0;
-        let availableItems = 0;
-        let borrowedItems = 0;
-        let totalConsumed = 0;
-
-        items.forEach(i => {
-          totalItems += i.totalQuantity;
-          availableItems += i.availableQuantity;
-        });
-
-        history.forEach(h => {
-          if (h.status === 'borrowed') borrowedItems += h.borrowQty;
-          if (h.status === 'returned' && typeof h.consumedQty === 'number') totalConsumed += h.consumedQty;
-        });
-
-        // คำนวณสถิติรายอุปกรณ์
-        const itemUsageStats = items.map(item => {
-          const itemBorrows = history.filter(h => h.itemName === item.name);
-          const borrowTimes = itemBorrows.length;
-          const returnTimes = itemBorrows.filter(h => h.status === 'returned').length;
-          
-          let consumed = 0;
-          let currentlyBorrowed = 0;
-          itemBorrows.forEach(h => {
-            if (h.status === 'borrowed') currentlyBorrowed += h.borrowQty;
-            if (h.status === 'returned' && typeof h.consumedQty === 'number') consumed += h.consumedQty;
-          });
-
-          return {
-            name: item.name,
-            initialTotal: item.totalQuantity + consumed,
-            consumed: consumed,
-            currentTotal: item.totalQuantity,
-            borrowed: currentlyBorrowed,
-            available: item.availableQuantity,
-            borrowTimes: borrowTimes,
-            returnTimes: returnTimes
-          };
-        });
-
-        // จัดอันดับของที่ถูกยืมบ่อยสุด
-        const borrowCounts = {};
-        history.forEach(h => {
-          borrowCounts[h.itemName] = (borrowCounts[h.itemName] || 0) + 1;
-        });
-        const mostBorrowedItems = Object.keys(borrowCounts).map(name => ({
-          name: name,
-          count: borrowCounts[name]
-        })).sort((a,b) => b.count - a.count);
-
-        return {
-          totalItems,
-          availableItems,
-          borrowedItems,
-          totalConsumed,
-          totalBorrows: history.length,
-          itemUsageStats,
-          mostBorrowedItems
-        };
-      }
-    };
-
-    // ========================================================
-    // ตัวแปรและฟังก์ชันควบคุมระบบหน้าบ้าน (Frontend logicเดิม)
-    // ========================================================
     let cart = []; 
     let allBorrowedItems = []; 
     let myPieChart = null;
@@ -559,7 +344,8 @@
     function showAlert(msg, icon='success') { Swal.fire({ title: icon==='success'?'สำเร็จ!':'แจ้งเตือน!', text: msg, icon: icon }); }
     function showModal(id) { document.getElementById(id).style.display = 'block'; }
     function hideModal(id) { document.getElementById(id).style.display = 'none'; }
-    
+    function handleError(err) { hideLoader(); showAlert(err.message || 'เกิดข้อผิดพลาดในการรับส่งข้อมูล', 'error'); }
+
     document.querySelectorAll('.close-btn[data-modal]').forEach(btn => { btn.addEventListener('click', () => hideModal(btn.dataset.modal)); });
 
     document.getElementById('search-input').addEventListener('input', function(e) {
@@ -592,17 +378,17 @@
 
     function loadItems() { 
       showLoader(); 
-      setTimeout(() => {
-        const items = AppDB.getItems();
-        displayItems(items);
-      }, 200);
+      google.script.run
+        .withSuccessHandler(displayItems)
+        .withFailureHandler(handleError)
+        .getItems();
     }
 
     function displayItems(items) {
       dataCacheFlags.items = false; 
       window.allItems = items || []; 
       const grid = document.getElementById('items-grid'); grid.innerHTML = '';
-      if (!items || items.length === 0 || items.error) { grid.innerHTML = '<p>ไม่พบอุปกรณ์</p>'; hideLoader(); return; }
+      if (!items || items.length === 0) { grid.innerHTML = '<p>ไม่พบอุปกรณ์</p>'; hideLoader(); return; }
       
       items.forEach(item => {
         const inCart = cart.find(c => c.id == item.id);
@@ -671,26 +457,33 @@
       e.preventDefault(); showLoader();
       const payload = { borrowerName: document.getElementById('borrower-name').value, returnDate: document.getElementById('return-date').value, items: cart.map(c => ({ id: c.id, qty: c.requestQty })) };
       
-      setTimeout(() => {
-        const res = AppDB.processBorrow(payload);
-        hideLoader(); 
-        if(res.success) { 
-            showAlert('บันทึกการยืมเรียบร้อย!'); hideModal('borrow-modal'); cart = []; updateCartUI(); markDataStale(); 
-            if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
-        } else { showAlert(res.error, 'error'); }
-      }, 300);
+      google.script.run
+        .withSuccessHandler((res) => {
+          hideLoader();
+          if(res.success) { 
+              showAlert('บันทึกการยืมเรียบร้อย!'); hideModal('borrow-modal'); cart = []; updateCartUI(); markDataStale(); 
+              if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
+          } else { showAlert(res.error, 'error'); }
+        })
+        .withFailureHandler(handleError)
+        .processBorrow(payload);
     });
 
     function loadReturnItems() {
       showLoader();
-      setTimeout(() => {
-        window.allItems = AppDB.getItems();
-        fetchBorrowedItemsForReturn();
-      }, 200);
+      google.script.run
+        .withSuccessHandler((items) => {
+          window.allItems = items;
+          google.script.run
+            .withSuccessHandler(fetchBorrowedItemsForReturn)
+            .withFailureHandler(handleError)
+            .getBorrowedItems();
+        })
+        .withFailureHandler(handleError)
+        .getItems();
     }
     
-    function fetchBorrowedItemsForReturn() {
-      const data = AppDB.getBorrowedItems();
+    function fetchBorrowedItemsForReturn(data) {
       allBorrowedItems = data || []; 
       dataCacheFlags.return = false; 
       document.getElementById('return-search-input').value = ''; 
@@ -761,26 +554,28 @@
           });
           
           showLoader(); 
-          setTimeout(() => {
-            const res = AppDB.returnItems(returnPayload);
-            hideLoader();
-            if(res.success){ showAlert(res.message); markDataStale(); loadReturnItems(); } else { showAlert(res.error, 'error'); }
-          }, 300);
+          google.script.run
+            .withSuccessHandler((res) => {
+              hideLoader();
+              if(res.success){ showAlert(res.message); markDataStale(); loadReturnItems(); } else { showAlert(res.error, 'error'); }
+            })
+            .withFailureHandler(handleError)
+            .returnItems(returnPayload);
         } 
       }); 
     });
 
     function loadHistory() {
       showLoader();
-      setTimeout(() => {
-        const history = AppDB.getHistory();
-        renderHistoryTable(history);
-      }, 200);
+      google.script.run
+        .withSuccessHandler(renderHistoryTable)
+        .withFailureHandler(handleError)
+        .getHistory();
     }
 
     function renderHistoryTable(history) {
       dataCacheFlags.history = false; hideLoader(); const container = document.getElementById('history-table-container');
-      if(!history || history.length === 0 || history.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีประวัติการทำรายการ</p>'; return; }
+      if(!history || history.length === 0) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีประวัติการทำรายการ</p>'; return; }
       let html = `<table><thead><tr><th>รหัส</th><th>ผู้ยืม</th><th>ชื่ออุปกรณ์</th><th>จำนวนยืม</th><th>วันที่ยืม</th><th>กำหนดคืน</th><th>สถานะ</th><th>คืนสภาพดี</th><th>ใช้ไป</th><th>วันที่คืนจริง</th><th>ผู้คืน</th></tr></thead><tbody id="hist-body">`;
       history.forEach(h => {
          let statusBadge = h.status === 'borrowed' ? '<span class="status-badge status-warning">กำลังยืม</span>' : '<span class="status-badge status-available">คืนแล้ว</span>';
@@ -791,14 +586,14 @@
 
     function loadStats() {
       showLoader(); 
-      setTimeout(() => {
-        const stats = AppDB.getStats();
-        renderStats(stats);
-      }, 200);
+      google.script.run
+        .withSuccessHandler(renderStats)
+        .withFailureHandler(handleError)
+        .getStats();
     }
 
     function renderStats(stats) {
-      dataCacheFlags.stats = false; hideLoader(); if(stats.error) { showAlert(stats.error, 'error'); return; }
+      dataCacheFlags.stats = false; hideLoader();
       
       document.getElementById('stats-grid').innerHTML = `
         <div class="stat-card"><div class="value">${stats.totalItems}</div><div class="label">ทั้งหมด (ชิ้น)</div></div>
@@ -846,16 +641,19 @@
 
     function loadManageItems() {
        showLoader(); 
-       setTimeout(() => {
-         currentManageItems = AppDB.getItems(); 
-         renderManageItemsTable(); 
-         hideLoader(); 
-       }, 200);
+       google.script.run
+        .withSuccessHandler((items) => {
+          currentManageItems = items;
+          renderManageItemsTable();
+          hideLoader();
+        })
+        .withFailureHandler(handleError)
+        .getItems();
     }
 
     function renderManageItemsTable() {
          const container = document.getElementById('manage-items-table-container');
-         if(!currentManageItems || currentManageItems.length===0 || currentManageItems.error) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
+         if(!currentManageItems || currentManageItems.length===0) { container.innerHTML = '<p style="text-align:center; padding: 20px;">ไม่มีอุปกรณ์</p>'; return; }
          let html = `<table><thead><tr><th>รูป</th><th>ชื่ออุปกรณ์</th><th>คำอธิบาย</th><th>ตั้งต้น</th><th>พร้อมยืม</th><th>จัดการ</th></tr></thead><tbody>`;
          currentManageItems.forEach(item => {
             html += `<tr><td style="text-align:center;"><img src="${item.image}" style="width:30px; height:30px; object-fit:contain; border:1px solid #ccc; border-radius:4px;"></td><td>${item.name}</td><td>${item.description}</td><td style="text-align:center; font-weight:bold;">${item.totalQuantity}</td><td style="text-align:center; font-weight:bold; color:var(--success);">${item.availableQuantity}</td><td style="white-space:nowrap;"><button class="btn btn-edit" onclick="editItem('${item.id}')">แก้ไข</button><button class="btn btn-delete" onclick="deleteItem('${item.id}')">ลบ</button></td></tr>`;
@@ -879,11 +677,13 @@
         }).then((result) => {
             if (result.isConfirmed) { 
               showLoader(); 
-              setTimeout(() => {
-                const res = AppDB.deleteItem(id);
-                hideLoader(); 
-                if(res.success) { showAlert('ลบสำเร็จ!'); markDataStale(); loadManageItems(); if(document.getElementById('items-view').classList.contains('active')) loadItems(); } else { showAlert(res.error, 'error'); }
-              }, 200);
+              google.script.run
+                .withSuccessHandler((res) => {
+                  hideLoader();
+                  if(res.success) { showAlert('ลบสำเร็จ!'); markDataStale(); loadManageItems(); if(document.getElementById('items-view').classList.contains('active')) loadItems(); } else { showAlert(res.error, 'error'); }
+                })
+                .withFailureHandler(handleError)
+                .deleteItem(id);
             }
         });
     }
@@ -899,18 +699,17 @@
         const payload = { id: id || null, name: document.getElementById('item-name').value, description: document.getElementById('item-description').value, quantity: document.getElementById('item-quantity').value, image: document.getElementById('item-image-base64').value };
         showLoader();
         
-        setTimeout(() => {
-          let res;
-          if(id) { res = AppDB.updateItem(payload); } 
-          else { res = AppDB.addItem(payload); }
-          
-          hideLoader();
-          if(res.success) { 
-            showAlert(id ? 'แก้ไขข้อมูลสำเร็จ!' : 'เพิ่มอุปกรณ์สำเร็จ!'); 
-            hideModal('item-form-modal'); showModal('manage-items-modal'); markDataStale(); loadManageItems(); 
-            if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
-          } else { showAlert(res.error, 'error'); }
-        }, 300);
+        const action = id ? 'updateItem' : 'addItem';
+        google.script.run
+          .withSuccessHandler((res) => {
+            hideLoader();
+            if(res.success) { 
+              showAlert(id ? 'แก้ไขข้อมูลสำเร็จ!' : 'เพิ่มอุปกรณ์สำเร็จ!'); 
+              hideModal('item-form-modal'); showModal('manage-items-modal'); markDataStale(); loadManageItems(); 
+              if(document.getElementById('items-view').classList.contains('active')) loadItems(); 
+            } else { showAlert(res.error, 'error'); }
+          })
+          .withFailureHandler(handleError)[action](payload);
     });
 
     function exportStatsToPDF() {
@@ -944,9 +743,6 @@
       });
     }
 
-    // ==========================================
-    // ลอจิกการทำงานของระบบสแกน QR Code
-    // ==========================================
     document.getElementById('scan-qr-btn').addEventListener('click', () => {
       showModal('qr-modal');
       startScanner();
@@ -978,9 +774,7 @@
 
     function onScanSuccess(decodedText, decodedResult) {
       stopScanner(); 
-      
       const scannedId = decodedText.trim(); 
-      // รองรับการค้นหาจากไอดี (เช่น 1001) หรือ ชื่ออุปกรณ์ในระบบ
       const item = window.allItems.find(i => i.id == scannedId || i.name.toLowerCase() === scannedId.toLowerCase());
       
       if (item) {
@@ -989,12 +783,8 @@
              if (existingIndex === -1) {
                  cart.push({ id: item.id, name: item.name, maxQty: item.availableQuantity, requestQty: 1 });
                  updateCartUI();
-                 
                  const btn = document.getElementById('add-btn-' + item.id);
-                 if(btn) { 
-                     btn.className = 'btn btn-secondary selected'; 
-                     btn.textContent = 'เอาออก'; 
-                 }
+                 if(btn) { btn.className = 'btn btn-secondary selected'; btn.textContent = 'เอาออก'; }
                  showAlert(`เพิ่ม "${item.name}" ลงในตะกร้าเรียบร้อยแล้ว!`, 'success');
              } else {
                  showAlert(`"${item.name}" มีอยู่ในตะกร้าเรียบร้อยแล้ว`, 'info');
@@ -1007,9 +797,7 @@
       }
     }
 
-    function onScanFailure(error) {
-      // ปล่อยว่างไว้เพื่อป้องกันไม่ให้แสดง Alert บ่อยขณะกำลังค้นหาคิวอาร์โค้ด
-    }
+    function onScanFailure(error) {}
   </script>
 </body>
 </html>
